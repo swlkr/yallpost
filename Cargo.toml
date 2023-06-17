@@ -4,5 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = { version = "0.6.18" }
-tokio = { version = "1.28.2", features = ["full"] }
+axum = { version = "0.6.18", optional = true }
+tokio = { version = "1.28.2", features = ["full"], optional = true }
+
+[features]
+default = ["backend"]
+backend = ["tokio", "axum"]
