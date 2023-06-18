@@ -18,12 +18,18 @@ fn main() {
 
 #[cfg(feature = "backend")]
 mod backend {
-    use axum::{response::Html, routing::get, Router, Server};
+    use axum::{
+        http::Uri,
+        response::{Html, IntoResponse},
+        routing::get,
+        Router, Server,
+    };
+    use mozzzz::backend::*;
     use std::net::SocketAddr;
 
     #[tokio::main]
     pub async fn main() {
-        let app = Router::new().route("/", get(render));
+        let app = routes();
         let addr: SocketAddr = "127.0.0.1:9004".parse().expect("Problem parsing address");
         println!("listening on {}", addr);
         Server::bind(&addr)
@@ -32,7 +38,28 @@ mod backend {
             .expect("Problem starting axum");
     }
 
-    async fn render() -> Html<&'static str> {
-        Html("<h1>Yo from the backend</h1>")
+    fn routes() -> Router {
+        Router::new()
+            .route("/", get(index))
+            .route("/assets/*file", get(assets))
+            .fallback_service(get(not_found))
+    }
+
+    async fn index() -> Result<Html<String>, AppError> {
+        let asset = Assets::get("index.html").ok_or(AppError::NotFound)?;
+        let index_html = std::str::from_utf8(asset.data.as_ref())?;
+        Ok(Html(index_html.to_string()))
+    }
+
+    async fn assets(uri: Uri) -> impl IntoResponse {
+        let mut path = uri.path().trim_start_matches('/').to_string();
+        if path.starts_with("dist/") {
+            path = path.replace("dist/", "");
+        }
+        StaticFile(path)
+    }
+
+    async fn not_found() -> impl IntoResponse {
+        AppError::NotFound
     }
 }
