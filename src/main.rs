@@ -1,5 +1,6 @@
 /*
-    TODO: move backend to backend
+    TODO: static assets
+    TODO: favicon + meta tags?
     TODO: add dioxus
     TODO: server fns
     TODO: env vars
