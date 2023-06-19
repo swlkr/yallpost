@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 /*
     TODO: add dioxus ssr
     TODO: static assets
@@ -9,6 +10,7 @@
     TODO: env vars
     TODO: sqlx
 */
+use dioxus::prelude::*;
 
 fn main() {
     #[cfg(feature = "backend")]
@@ -17,12 +19,15 @@ fn main() {
 
 #[cfg(feature = "backend")]
 mod backend {
+    use super::*;
     use axum::{
+        extract::State,
         http::Uri,
         response::{Html, IntoResponse},
         routing::get,
         Router, Server,
     };
+    use dioxus_ssr;
     use mozzzz::backend::*;
     use std::net::SocketAddr;
 
@@ -38,19 +43,24 @@ mod backend {
     }
 
     fn routes() -> Router {
+        let app_state = AppState::new();
+        let dynamic_routes = Router::new().route("/", get(index)).with_state(app_state);
+        let static_routes = Router::new().route("/assets/*file", get(serve_assets));
+
         Router::new()
-            .route("/", get(index))
-            .route("/assets/*file", get(assets))
+            .nest("", dynamic_routes)
+            .nest("", static_routes)
             .fallback_service(get(not_found))
     }
 
-    async fn index() -> Result<Html<String>, AppError> {
-        let asset = Assets::get("index.html").ok_or(AppError::NotFound)?;
-        let index_html = std::str::from_utf8(asset.data.as_ref())?;
-        Ok(Html(index_html.to_string()))
+    async fn index(State(state): State<AppState>) -> Html<String> {
+        let AppState { assets } = state;
+        let mut vdom = VirtualDom::new_with_props(Layout, LayoutProps { assets });
+        let _ = vdom.rebuild();
+        Html(format!("<!DOCTYPE html>{}", dioxus_ssr::render(&vdom)))
     }
 
-    async fn assets(uri: Uri) -> impl IntoResponse {
+    async fn serve_assets(uri: Uri) -> impl IntoResponse {
         let mut path = uri.path().trim_start_matches('/').to_string();
         if path.starts_with("dist/") {
             path = path.replace("dist/", "");
@@ -61,4 +71,42 @@ mod backend {
     async fn not_found() -> impl IntoResponse {
         AppError::NotFound
     }
+
+    #[inline_props]
+    fn Head<'a>(cx: Scope, assets: &'a Vec<Asset>) -> Element {
+        let assets = assets.iter().map(|a| match a.ext {
+            Ext::Css => rsx! { link { rel: "stylesheet", href: "{a}" } },
+            Ext::Js => rsx! { script { src: "{a}", defer: true } },
+            Ext::Unknown => rsx! { () },
+        });
+        cx.render(rsx! {
+            head {
+                meta { charset: "utf-8" }
+                meta { name: "viewport", content: "width=device-width" }
+                title { "mozzzz" }
+                assets
+            }
+        })
+    }
+
+    #[derive(Props, PartialEq)]
+    struct LayoutProps {
+        assets: Vec<Asset>,
+    }
+
+    fn Layout(cx: Scope<LayoutProps>) -> Element {
+        let LayoutProps { assets } = cx.props;
+        cx.render(rsx! {
+            Head { assets: assets }
+            body {
+                main { id: "main", App {} }
+            }
+        })
+    }
+}
+
+fn App(cx: Scope) -> Element {
+    cx.render(rsx! {
+        div { class: "h-screen dark:bg-gray-950 dark:text-white text-gray-950", "Yo from dioxus ssr" }
+    })
 }
