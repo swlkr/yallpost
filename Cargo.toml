@@ -9,9 +9,12 @@ tokio = { version = "1.28.2", features = ["full"], optional = true }
 rust-embed = { version = "6.4.2", optional = true }
 thiserror = { version = "1.0.40", optional = true }
 mime_guess = { version = "2.0.4", optional = true }
-dioxus-ssr = { version = "0.3.0", optional = true }
-dioxus = { version = "0.3.2" }
+dioxus-ssr = { version = "0.3", optional = true }
+dioxus = { version = "0.3" }
+dioxus-web = { version = "0.3", features = ["hydrate"], optional = true }
+wasm-bindgen = { version = "=0.2.85", optional = true }
 
 [features]
-default = ["backend"]
+default = ["frontend"]
+frontend = ["dioxus-web", "wasm-bindgen"]
 backend = ["tokio", "axum", "rust-embed", "mime_guess", "thiserror", "dioxus-ssr"]
