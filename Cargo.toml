@@ -18,3 +18,10 @@ wasm-bindgen = { version = "=0.2.87", optional = true }
 default = ["frontend"]
 frontend = ["dioxus-web", "wasm-bindgen"]
 backend = ["tokio", "axum", "rust-embed", "mime_guess", "thiserror", "dioxus-ssr"]
+
+[profile.release]
+lto = true
+panic = "abort"
+opt-level = 'z'
+strip = true
+codegen-units = 1
