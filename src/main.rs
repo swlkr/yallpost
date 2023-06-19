@@ -1,10 +1,16 @@
 #![allow(non_snake_case)]
 /*
+    TODO: rename to replyyy
     TODO: favicons
     TODO: meta tags
     TODO: server fns
     TODO: env vars
     TODO: sqlx
+    TODO: sessions
+    TODO: signup
+    TODO: login
+    TODO: logout
+    TODO: posts
 */
 use dioxus::prelude::*;
 
