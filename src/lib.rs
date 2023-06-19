@@ -1,3 +1,4 @@
+#[cfg(feature = "backend")]
 pub mod backend {
     use axum::body::Full;
     use axum::http::{header, StatusCode};
