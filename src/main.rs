@@ -1,6 +1,5 @@
 #![allow(non_snake_case)]
 /*
-    TODO: rename to yallpost
     TODO: favicons
     TODO: meta tags
     TODO: server fns
