@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 /*
-    TODO: rename to replyyy
+    TODO: rename to yallpost
     TODO: favicons
     TODO: meta tags
     TODO: server fns
@@ -39,8 +39,8 @@ mod backend {
         Router, Server,
     };
     use dioxus_ssr;
-    use mozzzz::backend::*;
     use std::net::SocketAddr;
+    use yallpost::backend::*;
 
     #[tokio::main]
     pub async fn main() {
@@ -107,7 +107,7 @@ mod backend {
                 meta { charset: "UTF-8" }
                 meta { name: "viewport", content: "width=device-width, initial-scale=1" }
                 meta { content: "text/html;charset=utf-8", http_equiv: "Content-Type" }
-                title { "mozzzz" }
+                title { "yallpost" }
                 assets
             }
         })

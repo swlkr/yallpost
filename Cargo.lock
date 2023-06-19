@@ -1075,21 +1075,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mozzzz"
-version = "0.1.0"
-dependencies = [
- "axum",
- "dioxus",
- "dioxus-ssr",
- "dioxus-web",
- "mime_guess",
- "rust-embed",
- "thiserror",
- "tokio",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "notify"
 version = "5.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2001,3 +1986,18 @@ name = "windows_x86_64_msvc"
 version = "0.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
+
+[[package]]
+name = "yallpost"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "dioxus",
+ "dioxus-ssr",
+ "dioxus-web",
+ "mime_guess",
+ "rust-embed",
+ "thiserror",
+ "tokio",
+ "wasm-bindgen",
+]
