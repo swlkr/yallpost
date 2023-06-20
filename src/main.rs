@@ -1,7 +1,5 @@
 #![allow(non_snake_case)]
 /*
-    TODO: favicons
-    TODO: meta tags
     TODO: server fns
     TODO: env vars
     TODO: sqlx
@@ -10,6 +8,7 @@
     TODO: login
     TODO: logout
     TODO: posts
+    TODO: meta tags
 */
 use dioxus::prelude::*;
 
