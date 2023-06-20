@@ -66,28 +66,82 @@ pub mod backend {
         }
     }
 
+    #[derive(Clone, Default, PartialEq)]
+    pub struct AssetMap {
+        pub tailwind: String,
+        pub manifest: String,
+        pub favicon_ico: String,
+        pub favicon_svg: String,
+        pub apple_touch_icon: String,
+        pub dioxus: String,
+        pub dioxus_bg: String,
+    }
+
     #[derive(Clone)]
     pub struct AppState {
-        pub assets: Vec<Asset>,
+        pub assets: AssetMap,
     }
 
     impl AppState {
         pub fn new() -> Self {
-            let assets: Vec<Asset> = Assets::iter()
-                .map(|x| {
-                    let path = x.as_ref();
-                    let ext: Ext = path.parse().unwrap_or_default();
-                    if let Some(file) = Assets::get(path) {
-                        Asset::new(
-                            ext,
-                            path.to_string(),
-                            file.metadata.last_modified().unwrap_or(0),
-                        )
-                    } else {
-                        Asset::default()
+            let mut assets = AssetMap::default();
+            for asset in Assets::iter() {
+                let path = asset.as_ref();
+                if let Some(file) = Assets::get(path) {
+                    match path.split("/").last().unwrap_or_default() {
+                        "tailwind.css" => {
+                            assets.tailwind = format!(
+                                "{}?v={}",
+                                path,
+                                file.metadata.last_modified().unwrap_or_default()
+                            )
+                        }
+                        "site.webmanifest" => {
+                            assets.manifest = format!(
+                                "{}?v={}",
+                                path,
+                                file.metadata.last_modified().unwrap_or_default()
+                            )
+                        }
+                        "favicon.ico" => {
+                            assets.favicon_ico = format!(
+                                "{}?v={}",
+                                path,
+                                file.metadata.last_modified().unwrap_or_default()
+                            )
+                        }
+                        "favicon.svg" => {
+                            assets.favicon_svg = format!(
+                                "{}?v={}",
+                                path,
+                                file.metadata.last_modified().unwrap_or_default()
+                            )
+                        }
+                        "apple_touch_icon.png" => {
+                            assets.apple_touch_icon = format!(
+                                "{}?v={}",
+                                path,
+                                file.metadata.last_modified().unwrap_or_default()
+                            )
+                        }
+                        "dioxus.js" => {
+                            assets.dioxus = format!(
+                                "{}?v={}",
+                                path,
+                                file.metadata.last_modified().unwrap_or_default()
+                            )
+                        }
+                        "dioxus_bg.wasm" => {
+                            assets.dioxus_bg = format!(
+                                "{}?v={}",
+                                path,
+                                file.metadata.last_modified().unwrap_or_default()
+                            )
+                        }
+                        _ => {}
                     }
-                })
-                .collect();
+                }
+            }
             Self { assets }
         }
     }
@@ -116,16 +170,6 @@ pub mod backend {
                 "css" => Ok(Self::Css),
                 "js" => Ok(Self::Js),
                 _ => Err(AppError::AssetExt),
-            }
-        }
-    }
-
-    impl Asset {
-        fn new(ext: Ext, path: String, last_modified: u64) -> Self {
-            Self {
-                ext,
-                path,
-                last_modified,
             }
         }
     }

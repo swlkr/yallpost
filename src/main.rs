@@ -92,52 +92,39 @@ mod backend {
     }
 
     #[inline_props]
-    fn Head<'a>(cx: Scope, assets: &'a Vec<Asset>) -> Element {
-        let assets = assets
-            .iter()
-            .filter(|a| !a.path.contains("dioxus"))
-            .map(|a| match a.ext {
-                Ext::Css => rsx! { link { rel: "stylesheet", href: "{a}" } },
-                Ext::Js => rsx! { script { src: "{a}", defer: true } },
-                Ext::Unknown => rsx! {()},
-            });
+    fn Head<'a>(cx: Scope, assets: &'a AssetMap) -> Element {
         cx.render(rsx! {
             head {
                 meta { charset: "UTF-8" }
                 meta { name: "viewport", content: "width=device-width, initial-scale=1" }
                 meta { content: "text/html;charset=utf-8", http_equiv: "Content-Type" }
                 title { "yallpost" }
-                assets
+                link { rel: "icon", href: "{assets.favicon_ico}", sizes: "48x48" }
+                link { rel: "icon", href: "{assets.favicon_svg}", sizes: "any", r#type: "image/svg+xml" }
+                link { rel: "apple-touch-icon", href: "{assets.apple_touch_icon}" }
+                link { rel: "manifest", href: "{assets.manifest}" }
+                link { rel: "stylesheet", href: "{assets.tailwind}" }
             }
         })
     }
 
     #[derive(Props, PartialEq)]
     struct LayoutProps {
-        assets: Vec<Asset>,
+        assets: AssetMap,
         app: String,
     }
 
     fn Layout(cx: Scope<LayoutProps>) -> Element {
         let LayoutProps { assets, app } = cx.props;
-        let x: Vec<u64> = assets
-            .iter()
-            .filter(|a| a.path.contains("dioxus.js") || a.path.contains("dioxus_bg.wasm"))
-            .map(|a| a.last_modified)
-            .collect();
-        let js = if let (Some(a), Some(b)) = (x.get(0), x.get(1)) {
-            format!(
-                r#"import init from "/./assets/dioxus/dioxus.js?v={}";
-                   init("/./assets/dioxus/dioxus_bg.wasm?v={}").then(wasm => {{
-                     if (wasm.__wbindgen_start == undefined) {{
-                       wasm.main();
-                     }}
-                   }});"#,
-                a, b
-            )
-        } else {
-            Default::default()
-        };
+        let js = format!(
+            r#"import init from "/./assets/dioxus/dioxus.js?v={}";
+               init("/./assets/dioxus/dioxus_bg.wasm?v={}").then(wasm => {{
+                 if (wasm.__wbindgen_start == undefined) {{
+                   wasm.main();
+                 }}
+               }});"#,
+            assets.dioxus, assets.dioxus_bg
+        );
         cx.render(rsx! {
             Head { assets: assets }
             body {
@@ -149,7 +136,22 @@ mod backend {
 }
 
 fn App(cx: Scope) -> Element {
+    let mut count = use_state(cx, || 0);
+    let inc = move |_| {
+        count += 1;
+    };
+    let dec = move |_| {
+        count -= 1;
+    };
     cx.render(rsx! {
-        div { class: "h-screen dark:bg-gray-950 dark:text-white text-gray-950", "yo from dioxus hydrate"}
+        div {
+            class: "h-screen dark:bg-gray-950 dark:text-white text-gray-950",
+            div { "count: {count}" }
+            div {
+                class: "flex gap-4",
+                button { onclick: inc, "+" }
+                button { onclick: dec, "-" }
+            }
+        }
     })
 }
