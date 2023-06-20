@@ -29,6 +29,7 @@ fn main() {
 mod frontend {
     pub fn main() {
         dioxus_web::launch_with_props(super::App, (), dioxus_web::Config::default().hydrate(true));
+        #[cfg(debug_assertions)]
         wasm_logger::init(wasm_logger::Config::default());
     }
 }
