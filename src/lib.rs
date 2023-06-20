@@ -1,8 +1,13 @@
+use serde::{Deserialize, Serialize};
+
+pub const BACKEND_FN_URL: &'static str = "/backend_fn";
+
 #[cfg(feature = "backend")]
 pub mod backend {
     use axum::body::Full;
     use axum::http::{header, StatusCode};
     use axum::response::Html;
+    use axum::Json;
     use axum::{response::IntoResponse, response::Response};
     use mime_guess;
     use rust_embed::RustEmbed;
@@ -177,6 +182,73 @@ pub mod backend {
     impl std::fmt::Display for Asset {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_fmt(format_args!("{}?v={}", self.path, self.last_modified))
+        }
+    }
+
+    use super::BackendFnError;
+
+    impl IntoResponse for BackendFnError {
+        fn into_response(self) -> Response {
+            let (status, body) = match self {
+                _ => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(r#"{"error": "Probably a json parse error}"#),
+                ),
+            };
+
+            (status, body).into_response()
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum BackendFnError {
+    JsonSerialize,
+    JsonParse,
+    Request,
+    JsError,
+    SerdeError,
+    GlooError,
+}
+
+#[cfg(feature = "frontend")]
+pub async fn call_backend_fn<I, O>(body: I) -> Result<O, BackendFnError>
+where
+    I: serde::Serialize + Sized,
+    O: serde::de::DeserializeOwned,
+{
+    let response = gloo_net::http::Request::post(BACKEND_FN_URL)
+        .json(&body)?
+        .send()
+        .await?;
+    // try to parse error first
+    let text = response.text().await?;
+    if let Ok(app_error) = serde_json::from_str::<BackendFnError>(&text) {
+        return Err(app_error);
+    }
+    serde_json::from_str::<O>(&text).map_err(BackendFnError::from)
+}
+
+#[cfg(feature = "frontend")]
+mod frontend {
+    use super::BackendFnError;
+
+    impl From<gloo_net::Error> for BackendFnError {
+        fn from(value: gloo_net::Error) -> Self {
+            match value {
+                gloo_net::Error::JsError(_) => Self::JsError,
+                gloo_net::Error::SerdeError(_) => Self::SerdeError,
+                gloo_net::Error::GlooError(_) => Self::GlooError,
+            }
+        }
+    }
+
+    impl From<serde_json::Error> for BackendFnError {
+        fn from(value: serde_json::Error) -> Self {
+            log::info!("{:?}", value);
+            match value {
+                _ => Self::JsonParse,
+            }
         }
     }
 }

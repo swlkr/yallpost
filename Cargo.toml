@@ -3,6 +3,11 @@ name = "yallpost"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = [
+  "proc_macros",
+]
+
 [dependencies]
 axum = { version = "0.6.18", optional = true }
 tokio = { version = "1.28.2", features = ["full"], optional = true }
@@ -13,10 +18,17 @@ dioxus-ssr = { version = "0.3", optional = true }
 dioxus = { version = "0.3" }
 dioxus-web = { version = "0.3", features = ["hydrate"], optional = true }
 wasm-bindgen = { version = "=0.2.87", optional = true }
+gloo-net = { version = "0.3.0", optional = true }
+serde = "1.0.164"
+serde_json = "1.0.97"
+proc_macros = { path = "proc_macros" }
+wasm-logger = { version = "0.2.0", optional = true }
+web-sys = { version = "0.3.62", optional = true }
+log = { version = "0.4.17" }
 
 [features]
 default = ["frontend"]
-frontend = ["dioxus-web", "wasm-bindgen"]
+frontend = ["dioxus-web", "wasm-bindgen", "gloo-net", "wasm-logger", "web-sys"]
 backend = ["tokio", "axum", "rust-embed", "mime_guess", "thiserror", "dioxus-ssr"]
 
 [profile.release]

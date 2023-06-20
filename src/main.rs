@@ -11,6 +11,12 @@
     TODO: meta tags
 */
 use dioxus::prelude::*;
+use proc_macros::{backend, BackendFunction};
+use serde::{Deserialize, Serialize};
+#[cfg(feature = "frontend")]
+#[allow(unused_imports)]
+use yallpost::call_backend_fn;
+use yallpost::BackendFnError;
 
 fn main() {
     #[cfg(feature = "frontend")]
@@ -23,6 +29,7 @@ fn main() {
 mod frontend {
     pub fn main() {
         dioxus_web::launch_with_props(super::App, (), dioxus_web::Config::default().hydrate(true));
+        wasm_logger::init(wasm_logger::Config::default());
     }
 }
 
@@ -31,14 +38,14 @@ mod backend {
     use super::*;
     use axum::{
         extract::State,
-        http::Uri,
+        http::{StatusCode, Uri},
         response::{Html, IntoResponse},
-        routing::get,
-        Router, Server,
+        routing::{get, post},
+        Json, Router, Server,
     };
     use dioxus_ssr;
     use std::net::SocketAddr;
-    use yallpost::backend::*;
+    use yallpost::{backend::*, BACKEND_FN_URL};
 
     #[tokio::main]
     pub async fn main() {
@@ -53,7 +60,10 @@ mod backend {
 
     fn routes() -> Router {
         let app_state = AppState::new();
-        let dynamic_routes = Router::new().route("/", get(index)).with_state(app_state);
+        let dynamic_routes = Router::new()
+            .route("/", get(index))
+            .route(BACKEND_FN_URL, post(on_backend_fn))
+            .with_state(app_state);
         let static_routes = Router::new().route("/assets/*file", get(serve_assets));
 
         Router::new()
@@ -88,6 +98,14 @@ mod backend {
 
     async fn not_found() -> impl IntoResponse {
         AppError::NotFound
+    }
+
+    async fn on_backend_fn(Json(backend_fn): Json<BackendFn>) -> impl IntoResponse {
+        let sx = ServerCx {};
+        match backend_fn.backend(sx).await {
+            Ok(body) => (StatusCode::OK, body).into_response(),
+            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+        }
     }
 
     #[inline_props]
@@ -134,22 +152,53 @@ mod backend {
     }
 }
 
+#[derive(Clone, Default)]
+struct ServerCx {}
+
+#[derive(Serialize, Deserialize, BackendFunction)]
+enum BackendFn {
+    DoubleServer(DoubleServer),
+    HalveServer(HalveServer),
+}
+
+#[backend(DoubleServer)]
+async fn double_server(_sx: ServerCx, number: usize) -> Result<usize, BackendFnError> {
+    Ok(number * 2)
+}
+
+#[backend(HalveServer)]
+async fn halve_server(_sx: ServerCx, number: usize) -> Result<usize, BackendFnError> {
+    Ok(number / 2)
+}
+
 fn App(cx: Scope) -> Element {
-    let mut count = use_state(cx, || 0);
-    let inc = move |_| {
-        count += 1;
+    let count = use_state(cx, || 2);
+    let double = move |_| {
+        to_owned![count];
+        cx.spawn(async move {
+            if let Ok(num) = double_server(ServerCx::default(), *count.get()).await {
+                count.set(num);
+            }
+        });
     };
-    let dec = move |_| {
-        count -= 1;
+    let halve = move |_| {
+        to_owned![count];
+        cx.spawn(async move {
+            if let Ok(num) = halve_server(ServerCx::default(), *count.get()).await {
+                if num > 0 {
+                    count.set(num);
+                }
+            }
+        });
     };
     cx.render(rsx! {
         div {
-            class: "h-screen dark:bg-gray-950 dark:text-white text-gray-950",
-            div { "count: {count}" }
+            class: "h-screen dark:bg-gray-950 dark:text-white text-gray-950 w-screen justify-center items-center flex",
             div {
-                class: "flex gap-4",
-                button { onclick: inc, "+" }
-                button { onclick: dec, "-" }
+                class: "flex flex-col gap-4",
+                div { "count: {count.get()}" }
+                button { onclick: double, "Double it" }
+                button { onclick: halve, "Halve it" }
             }
         }
     })
