@@ -1,3 +1,6 @@
 /target
 dist/index.html
 dist/assets/dioxus
+.env
+.DS_Store
+*.sqlite*

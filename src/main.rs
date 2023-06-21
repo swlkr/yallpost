@@ -1,7 +1,29 @@
 #![allow(non_snake_case)]
 /*
-    TODO: server fns
-    TODO: env vars
+    TODO: schema
+    accounts
+        id int primary key
+        token text not null // nanoid
+        name text not null
+        updated_at int
+        created_at int
+
+    sessions
+        id int primary key
+        account_id int not null references accounts(id)
+        token text not null // nanoid
+        updated_at int
+        created_at int
+
+    posts
+        id int primary key
+        title text not null
+        url text
+        body text
+        account_id int not null references accounts(id)
+        updated_at int
+        created_at int
+    TODO: database env var
     TODO: sqlx
     TODO: sessions
     TODO: signup
@@ -50,13 +72,29 @@ mod backend {
 
     #[tokio::main]
     pub async fn main() {
-        let app = routes();
-        let addr: SocketAddr = "127.0.0.1:9004".parse().expect("Problem parsing address");
-        println!("listening on {}", addr);
-        Server::bind(&addr)
-            .serve(app.into_make_service())
-            .await
-            .expect("Problem starting axum");
+        ENV.set(Env::new()).unwrap();
+        DB.set(Database::new(env().database_url.clone()).await)
+            .unwrap();
+        let args: Vec<String> = std::env::args().collect();
+        let arg = args.get(1).cloned().unwrap_or(String::default());
+        match arg.as_str() {
+            "migrate" => {
+                db().migrate().await.expect("Error migrating");
+            }
+            "rollback" => {
+                db().rollback().await.expect("Error rolling back");
+            }
+            _ => {
+                let _ = db().migrate().await.expect("Problem running migrations");
+                let app = routes();
+                let addr: SocketAddr = "127.0.0.1:9004".parse().expect("Problem parsing address");
+                println!("listening on {}", addr);
+                Server::bind(&addr)
+                    .serve(app.into_make_service())
+                    .await
+                    .expect("Problem starting axum");
+            }
+        };
     }
 
     fn routes() -> Router {
@@ -173,7 +211,7 @@ async fn halve_server(_sx: ServerCx, number: usize) -> Result<usize, BackendFnEr
 }
 
 fn App(cx: Scope) -> Element {
-    let count = use_state(cx, || 2);
+    let count = use_state(cx, || 1);
     let double = move |_| {
         to_owned![count];
         cx.spawn(async move {
@@ -197,7 +235,7 @@ fn App(cx: Scope) -> Element {
             class: "h-screen dark:bg-gray-950 dark:text-white text-gray-950 w-screen justify-center items-center flex",
             div {
                 class: "flex flex-col gap-4",
-                div { "count: {count.get()}" }
+                div { "count: {count}" }
                 button { onclick: double, "Double it" }
                 button { onclick: halve, "Halve it" }
             }
