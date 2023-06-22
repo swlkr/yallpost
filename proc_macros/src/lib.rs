@@ -45,7 +45,7 @@ pub fn backend_function(input: TokenStream) -> TokenStream {
             .collect::<Vec<_>>();
     }
     let expanded = quote! {
-        #[cfg(feature = "backend")]
+        #[cfg(feature = "ssr")]
         impl #enum_name {
             async fn backend(self, sx: ServerCx) -> Result<String, BackendFnError> {
                 match self {
@@ -139,12 +139,12 @@ fn server_macro(args: TokenStream2, body: TokenStream2) -> Result<TokenStream2> 
             }
         }
 
-        #[cfg(feature = "backend")]
+        #[cfg(feature = "ssr")]
         #vis async fn #fn_name(#(#fn_args),*) #output_arrow #return_ty {
             #block
         }
 
-        #[cfg(not(feature = "backend"))]
+        #[cfg(not(feature = "ssr"))]
         #[allow(unused_variables)]
         #vis async fn #fn_name(#(#fn_args_2),*) #output_arrow #return_ty {
             call_backend_fn::<BackendFn, #output_ty>(BackendFn::#struct_name(#struct_name { #(#field_names),* })).await

@@ -14,9 +14,10 @@ tokio = { version = "1.28.2", features = ["full"], optional = true }
 rust-embed = { version = "6.4.2", optional = true }
 thiserror = { version = "1.0.40", optional = true }
 mime_guess = { version = "2.0.4", optional = true }
-dioxus-ssr = { version = "0.3", optional = true }
-dioxus = { version = "0.3" }
-dioxus-web = { version = "0.3", features = ["hydrate"], optional = true }
+dioxus-ssr = { git = "https://github.com/dioxuslabs/dioxus", optional = true }
+dioxus = { git = "https://github.com/dioxuslabs/dioxus" }
+dioxus-web = { git = "https://github.com/dioxuslabs/dioxus", features = ["hydrate"], optional = true }
+dioxus-fullstack = { git = "https://github.com/dioxuslabs/dioxus", features = ["axum", "ssr", "hot-reload"], optional = true }
 wasm-bindgen = { version = "=0.2.87", optional = true }
 gloo-net = { version = "0.3.0", optional = true }
 serde = "1.0.164"
@@ -26,11 +27,13 @@ wasm-logger = { version = "0.2.0", optional = true }
 web-sys = { version = "0.3.62", optional = true }
 log = { version = "0.4.17" }
 sqlx = { version = "0.7.0-alpha.3", features = ["sqlite", "migrate", "runtime-tokio"], optional = true }
+tracing = { version = "0.1.37", optional = true }
+tracing-subscriber = { version = "0.3.17", optional = true }
 
 [features]
-default = ["frontend"]
-frontend = ["dioxus-web", "wasm-bindgen", "gloo-net", "wasm-logger", "web-sys"]
-backend = ["tokio", "axum", "rust-embed", "mime_guess", "thiserror", "dioxus-ssr", "sqlx"]
+default = ["csr"]
+csr = ["dioxus-web", "wasm-bindgen", "gloo-net", "wasm-logger", "web-sys"]
+ssr = ["tokio", "axum", "rust-embed", "mime_guess", "thiserror", "dioxus-ssr", "sqlx", "dioxus-fullstack", "tracing", "tracing-subscriber"]
 
 [profile.release]
 lto = true
@@ -38,3 +41,6 @@ panic = "abort"
 opt-level = 'z'
 strip = true
 codegen-units = 1
+
+[build-dependencies]
+cfg_aliases = "0.1"

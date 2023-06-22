@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const BACKEND_FN_URL: &'static str = "/backend_fn";
 
-#[cfg(feature = "backend")]
+#[cfg(backend)]
 pub mod backend {
     use axum::body::Full;
     use axum::http::{header, StatusCode};
@@ -21,7 +21,7 @@ pub mod backend {
     };
     use std::collections::HashMap;
     use std::sync::OnceLock;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::Duration;
 
     #[derive(thiserror::Error, Debug)]
     pub enum AppError {
@@ -253,14 +253,8 @@ pub mod backend {
                 .await
                 .unwrap()
         }
-
-        fn now() -> f64 {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("unable to get epoch in insert_user")
-                .as_secs_f64()
-        }
     }
+
     pub static ENV: OnceLock<Env> = OnceLock::new();
     pub static DB: OnceLock<Database> = OnceLock::new();
 
@@ -314,7 +308,7 @@ pub enum BackendFnError {
     GlooError,
 }
 
-#[cfg(feature = "frontend")]
+#[cfg(frontend)]
 pub async fn call_backend_fn<I, O>(body: I) -> Result<O, BackendFnError>
 where
     I: serde::Serialize + Sized,
@@ -332,7 +326,7 @@ where
     serde_json::from_str::<O>(&text).map_err(BackendFnError::from)
 }
 
-#[cfg(feature = "frontend")]
+#[cfg(frontend)]
 mod frontend {
     use super::BackendFnError;
 
