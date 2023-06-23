@@ -2,6 +2,28 @@ use serde::{Deserialize, Serialize};
 
 pub const BACKEND_FN_URL: &'static str = "/backend_fn";
 
+pub mod models {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+    pub struct Account {
+        pub id: i64,
+        pub name: String,
+        pub login_code: String,
+        pub updated_at: i64,
+        pub created_at: i64,
+    }
+
+    #[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
+    pub struct Session {
+        pub id: i64,
+        pub identifier: String,
+        pub account_id: i64,
+        pub updated_at: i64,
+        pub created_at: i64,
+    }
+}
+
 #[cfg(backend)]
 pub mod backend {
     use axum::body::Full;
@@ -21,7 +43,7 @@ pub mod backend {
     };
     use std::collections::HashMap;
     use std::sync::OnceLock;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[derive(thiserror::Error, Debug)]
     pub enum AppError {
@@ -36,7 +58,7 @@ pub mod backend {
         #[error("error migrating")]
         Migrate,
         #[error("error inserting into database")]
-        DatabaseInsert,
+        DatabaseInsert(#[from] sqlx::Error),
         #[error("error selecting row from database")]
         DatabaseSelect,
         #[error("error rolling back latest migration")]
@@ -53,10 +75,28 @@ pub mod backend {
     #[folder = "dist"]
     pub struct Assets;
 
+    struct ServerError<'a> {
+        reason: &'a str,
+    }
+
     impl IntoResponse for AppError {
         fn into_response(self) -> Response {
             let (status, error_message) = match self {
                 AppError::NotFound => (StatusCode::NOT_FOUND, format!("{self}")),
+                AppError::Http(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{:?}", err)),
+                AppError::DatabaseInsert(err) => {
+                    #[cfg(debug_assertions)]
+                    {
+                        (StatusCode::INTERNAL_SERVER_ERROR, format!("{:?}", err))
+                    }
+                    #[cfg(not(debug_assertions))]
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ServerError {
+                            reason: "Internal server error",
+                        }),
+                    )
+                }
                 _ => todo!(),
             };
             let body = Html(error_message);
@@ -106,12 +146,13 @@ pub mod backend {
     }
 
     #[derive(Clone)]
-    pub struct AppState {
+    pub struct BackendState {
         pub assets: AssetMap,
+        pub db: Database,
     }
 
-    impl AppState {
-        pub fn new() -> Self {
+    impl BackendState {
+        pub async fn new() -> Self {
             let mut assets = AssetMap::default();
             for asset in Assets::iter() {
                 let path = asset.as_ref();
@@ -170,9 +211,13 @@ pub mod backend {
                     }
                 }
             }
-            Self { assets }
+            let env = Env::new();
+            let db = Database::new(env.database_url.clone()).await;
+            Self { assets, db }
         }
     }
+
+    use crate::models::{Account, Session};
 
     use super::BackendFnError;
 
@@ -189,7 +234,7 @@ pub mod backend {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Database {
         connection: SqlitePool,
     }
@@ -253,6 +298,46 @@ pub mod backend {
                 .await
                 .unwrap()
         }
+
+        fn now() -> f64 {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("unable to get epoch in now")
+                .as_secs_f64()
+        }
+
+        pub async fn insert_account(&self, name: String) -> Result<Account, AppError> {
+            let token = nanoid::nanoid!();
+            let now = Self::now();
+            let account= sqlx::query_as!(Account, "insert into accounts (name, login_code, updated_at, created_at) values (?, ?, ?, ?) returning *", name, token, now, now).fetch_one(&self.connection).await?;
+            Ok(account)
+        }
+
+        pub async fn insert_session(&self, account_id: i64) -> Result<Session, AppError> {
+            let identifier = nanoid::nanoid!();
+            let now = Self::now();
+            let session = sqlx::query_as!(Session, "insert into sessions (identifier, account_id, updated_at, created_at) values (?, ?, ?, ?) returning *", identifier, account_id, now, now).fetch_one(&self.connection).await?;
+            Ok(session)
+        }
+
+        pub async fn account_by_id(&self, id: i64) -> Result<Account, AppError> {
+            let account =
+                sqlx::query_as!(Account, "select * from accounts where id = ? limit 1", id)
+                    .fetch_one(&self.connection)
+                    .await?;
+            Ok(account)
+        }
+
+        pub async fn session_by_identifer(&self, identifier: &str) -> Result<Session, AppError> {
+            let session = sqlx::query_as!(
+                Session,
+                "select * from sessions where identifier = ? limit 1",
+                identifier
+            )
+            .fetch_one(&self.connection)
+            .await?;
+            Ok(session)
+        }
     }
 
     pub static ENV: OnceLock<Env> = OnceLock::new();
@@ -308,6 +393,14 @@ pub enum BackendFnError {
     GlooError,
 }
 
+impl From<serde_json::Error> for BackendFnError {
+    fn from(value: serde_json::Error) -> Self {
+        match value {
+            _ => Self::JsonParse,
+        }
+    }
+}
+
 #[cfg(frontend)]
 pub async fn call_backend_fn<I, O>(body: I) -> Result<O, BackendFnError>
 where
@@ -327,7 +420,7 @@ where
 }
 
 #[cfg(frontend)]
-mod frontend {
+pub mod frontend {
     use super::BackendFnError;
 
     impl From<gloo_net::Error> for BackendFnError {
@@ -336,15 +429,6 @@ mod frontend {
                 gloo_net::Error::JsError(_) => Self::JsError,
                 gloo_net::Error::SerdeError(_) => Self::SerdeError,
                 gloo_net::Error::GlooError(_) => Self::GlooError,
-            }
-        }
-    }
-
-    impl From<serde_json::Error> for BackendFnError {
-        fn from(value: serde_json::Error) -> Self {
-            log::info!("{:?}", value);
-            match value {
-                _ => Self::JsonParse,
             }
         }
     }
