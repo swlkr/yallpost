@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "insert into accounts (name, login_code, updated_at, created_at) values (?, ?, ?, ?) returning *",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "login_code",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 3,
+        "type_info": "Int64"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "34a9da0bb5a600cc88b439574d285a24be141cc1c396cc1621564ed7bae431e2"
+}

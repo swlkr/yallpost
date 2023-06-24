@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "select * from sessions where identifier = ? limit 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "identifier",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "account_id",
+        "ordinal": 2,
+        "type_info": "Int64"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Int64"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 4,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ffb79dcb3a0dce7eae65065e8a0cd009ab6d2cf3ccb2c0dd110af79eefeaff3d"
+}
