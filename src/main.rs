@@ -239,8 +239,8 @@ mod backend {
             account,
         } = cx.props;
         let js = format!(
-            r#"import init from "/./assets/dioxus/dioxus.js?v={}";
-               init("/./assets/dioxus/dioxus_bg.wasm?v={}").then(wasm => {{
+            r#"import init from "/./{}";
+               init("/./{}").then(wasm => {{
                  if (wasm.__wbindgen_start == undefined) {{
                    wasm.main();
                  }}
