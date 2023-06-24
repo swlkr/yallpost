@@ -164,14 +164,14 @@ pub mod backend {
                                 file.metadata.last_modified().unwrap_or_default()
                             )
                         }
-                        "favicon.svg" => {
+                        "safari-pinned-tab.svg" => {
                             assets.favicon_svg = format!(
                                 "{}?v={}",
                                 path,
                                 file.metadata.last_modified().unwrap_or_default()
                             )
                         }
-                        "apple_touch_icon.png" => {
+                        "apple-touch-icon.png" => {
                             assets.apple_touch_icon = format!(
                                 "{}?v={}",
                                 path,
