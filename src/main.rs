@@ -1,28 +1,6 @@
 #![allow(non_snake_case)]
 /*
-    TODO: sessions
-    // 1. Create an account in the database
-    // 2. Handle duplicate unique index username errors
-    // 3. Create a session in the database
-    // 4. Set the session id in a cookie
-    // 5. Return the account
-    // 6. Add a set_account middleware from the session id in the cookie (from the database)
-    // 7. Set the account in initial props in Router {}
     TODO: schema
-    accounts
-        id int primary key
-        token text not null // nanoid
-        name text not null
-        updated_at int
-        created_at int
-
-    sessions
-        id int primary key
-        account_id int not null references accounts(id)
-        token text not null // nanoid
-        updated_at int
-        created_at int
-
     posts
         id int primary key
         title text not null
@@ -31,18 +9,14 @@
         account_id int not null references accounts(id)
         updated_at int
         created_at int
-    TODO: database env var
-    TODO: sqlx
-    TODO: sessions
-    TODO: signup
     TODO: login
     TODO: logout
-    TODO: postsgn
+    TODO: posts
     TODO: meta tags
 */
 use dioxus::prelude::*;
-use fermi::{use_atom_root, use_atom_state, use_init_atom_root, use_read, Atom};
-use proc_macros::{backend, BackendFunction};
+use fermi::{use_atom_state, use_init_atom_root, use_read, Atom};
+use proc_macros::BackendFunction;
 use serde::{Deserialize, Serialize};
 #[cfg(frontend)]
 #[allow(unused_imports)]
@@ -80,7 +54,7 @@ mod backend {
         extract::State,
         headers::Cookie,
         http::{self, HeaderMap, HeaderValue, StatusCode, Uri},
-        response::{Html, IntoResponse, Response},
+        response::{Html, IntoResponse},
         routing::{get, post},
         Json, Router, Server, TypedHeader,
     };
@@ -251,6 +225,7 @@ mod backend {
         })
     }
 
+    #[allow(unused_variables)]
     #[inline_props]
     fn Layout(
         cx: Scope,
