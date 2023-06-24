@@ -75,29 +75,14 @@ pub mod backend {
     #[folder = "dist"]
     pub struct Assets;
 
-    struct ServerError<'a> {
-        reason: &'a str,
-    }
-
     impl IntoResponse for AppError {
         fn into_response(self) -> Response {
             let (status, error_message) = match self {
                 AppError::NotFound => (StatusCode::NOT_FOUND, format!("{self}")),
-                AppError::Http(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{:?}", err)),
-                AppError::DatabaseInsert(err) => {
-                    #[cfg(debug_assertions)]
-                    {
-                        (StatusCode::INTERNAL_SERVER_ERROR, format!("{:?}", err))
-                    }
-                    #[cfg(not(debug_assertions))]
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ServerError {
-                            reason: "Internal server error",
-                        }),
-                    )
-                }
-                _ => todo!(),
+                _ => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                ),
             };
             let body = Html(error_message);
 
