@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "delete from sessions where identifier = ? returning *",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "identifier",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "account_id",
+        "ordinal": 2,
+        "type_info": "Int64"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Int64"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 4,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "473f3870e9e37d3558846f1da74720b65ada5b9c6e610c2117976f5adcde4eb4"
+}

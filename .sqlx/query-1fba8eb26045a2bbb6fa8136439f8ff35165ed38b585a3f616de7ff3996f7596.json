@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "select * from accounts where login_code = ? limit 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "login_code",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 3,
+        "type_info": "Int64"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1fba8eb26045a2bbb6fa8136439f8ff35165ed38b585a3f616de7ff3996f7596"
+}
