@@ -17,13 +17,13 @@
 use dioxus::prelude::*;
 use fermi::{use_atom_state, use_init_atom_root, use_read, Atom};
 use proc_macros::BackendFunction;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 #[cfg(frontend)]
 #[allow(unused_imports)]
 use yallpost::call_backend_fn;
 use yallpost::{
     models::{Account, Session},
-    BackendFnError,
+    BackendFnError, DELETE_ACCOUNT_URL, LOGIN_URL, LOGOUT_URL, SIGNUP_URL,
 };
 
 fn main() {
@@ -61,7 +61,9 @@ mod backend {
     use dioxus_fullstack::prelude::*;
     use dioxus_ssr;
     use std::net::SocketAddr;
-    use yallpost::{backend::*, BACKEND_FN_URL};
+    use yallpost::{
+        backend::*, BACKEND_FN_URL, DELETE_ACCOUNT_URL, LOGIN_URL, LOGOUT_URL, SIGNUP_URL,
+    };
 
     #[tokio::main]
     pub async fn main() {
@@ -97,7 +99,10 @@ mod backend {
     fn routes(app_state: BackendState) -> Router {
         let dynamic_routes = Router::new()
             .route("/", get(index))
-            .route("/signup", post(signup))
+            .route(SIGNUP_URL, post(signup))
+            .route(LOGIN_URL, post(login))
+            .route(LOGOUT_URL, post(logout))
+            .route(DELETE_ACCOUNT_URL, post(delete_account))
             .route(BACKEND_FN_URL, post(on_backend_fn))
             .connect_hot_reload()
             .with_state(app_state);
@@ -144,17 +149,63 @@ mod backend {
     }
 
     async fn signup(
-        State(st): State<BackendState>,
-        Json(params): Json<SignupParams>,
+        State(BackendState { db, .. }): State<BackendState>,
+        Json(SignupParams { name }): Json<SignupParams>,
     ) -> Result<impl IntoResponse, AppError> {
-        let account = st.db.insert_account(params.name).await?;
-        let session = st.db.insert_session(account.id).await?;
+        let account = db.insert_account(name).await?;
+        let session = db.insert_session(account.id).await?;
         let mut headers = HeaderMap::new();
         headers.insert(
             http::header::SET_COOKIE,
             HeaderValue::from_str(set_cookie(session).as_str()).unwrap(),
         );
         Ok((headers, Json(account)))
+    }
+
+    async fn login(
+        State(BackendState { db, .. }): State<BackendState>,
+        Json(LoginParams { login_code }): Json<LoginParams>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let account = db.account_by_login_code(login_code).await?;
+        let session = db.insert_session(account.id).await?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::SET_COOKIE,
+            HeaderValue::from_str(set_cookie(session).as_str()).unwrap(),
+        );
+        Ok((headers, Json(account)))
+    }
+
+    async fn logout(
+        TypedHeader(cookie): TypedHeader<Cookie>,
+        State(BackendState { db, .. }): State<BackendState>,
+        Json(_): Json<EmptyJson>,
+    ) -> Result<impl IntoResponse, AppError> {
+        if let Some(identifier) = cookie.get("id") {
+            db.delete_session_by_identifier(identifier).await?;
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::SET_COOKIE,
+            HeaderValue::from_str(set_cookie(Session::default()).as_str()).unwrap(),
+        );
+        Ok((headers, Json(EmptyJson::default())))
+    }
+
+    async fn delete_account(
+        TypedHeader(cookie): TypedHeader<Cookie>,
+        State(BackendState { db, .. }): State<BackendState>,
+        Json(_): Json<EmptyJson>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let identifier = cookie.get("id").ok_or(AppError::NotFound)?;
+        let session = db.delete_session_by_identifier(identifier).await?;
+        let _ = db.delete_account_by_id(session.account_id).await?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::SET_COOKIE,
+            HeaderValue::from_str(set_cookie(Session::default()).as_str()).unwrap(),
+        );
+        Ok((headers, Json(EmptyJson::default())))
     }
 
     async fn serve_assets(uri: Uri) -> impl IntoResponse {
@@ -182,17 +233,20 @@ mod backend {
     }
 
     async fn on_backend_fn(
+        State(BackendState { db, .. }): State<BackendState>,
         TypedHeader(cookie): TypedHeader<Cookie>,
         Json(backend_fn): Json<BackendFn>,
     ) -> impl IntoResponse {
         let session = match cookie.get("id") {
-            Some(cookie_str) => Some(Session {
-                identifier: cookie_str.to_string(),
-                ..Default::default()
-            }),
+            Some(identifier) => db.session_by_identifer(identifier).await.ok(),
             None => None,
         };
-        let sx = ServerCx { session };
+        let account = if let Some(Session { account_id, .. }) = session {
+            db.account_by_id(account_id).await.ok()
+        } else {
+            None
+        };
+        let sx = ServerCx { account };
         match backend_fn.backend(sx).await {
             Ok(body) => (StatusCode::OK, body).into_response(),
             Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
@@ -264,9 +318,12 @@ mod backend {
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
+struct EmptyJson {}
+
 #[derive(Clone, Default)]
 struct ServerCx {
-    pub session: Option<Session>,
+    pub account: Option<Account>,
 }
 
 #[derive(Serialize, Deserialize, BackendFunction)]
@@ -287,13 +344,17 @@ fn Nav<'a>(
     onclick: EventHandler<'a, View>,
     account: Option<Option<Account>>,
 ) -> Element {
+    let st = use_read(cx, APP_STATE);
     let is_logged_in = match account {
         Some(Some(_)) => true,
         Some(None) => false,
         None => false,
     };
-    let st = use_read(cx, APP_STATE);
-    let links = if st.current_account.is_some() || is_logged_in {
+    let is_logged_in = match st.ready {
+        true => st.current_account.is_some(),
+        false => is_logged_in,
+    };
+    let links = if is_logged_in {
         rsx! {a { class: "cursor-pointer", onclick: move |_| onclick.call(View::ShowAccount), "Account" }}
     } else {
         rsx! {
@@ -344,7 +405,12 @@ fn Router(cx: Scope<RouterProps>) -> Element {
     };
     let future = use_future(cx, (), |_| {
         to_owned![state, props];
-        async move { state.with_mut(|s| s.current_account = props.account.clone()) }
+        async move {
+            state.with_mut(|s| {
+                s.current_account = props.account.clone();
+                s.ready = true;
+            })
+        }
     });
     match future.value() {
         _ => {
@@ -375,23 +441,31 @@ struct SignupParams {
     name: String,
 }
 
-async fn call_signup(name: String) -> Result<Account, BackendFnError> {
+#[derive(Serialize, Deserialize, Clone)]
+struct LoginParams {
+    login_code: String,
+}
+
+#[allow(unused_variables)]
+async fn call_route<I: Serialize + DeserializeOwned, O: Serialize + DeserializeOwned + Default>(
+    route: &str,
+    input: I,
+) -> Result<O, BackendFnError> {
     #[cfg(frontend)]
     {
-        let params = SignupParams { name };
-        let account = gloo_net::http::Request::post("/signup")
-            .json(&params)?
+        let output = gloo_net::http::Request::post(route)
+            .json(&input)?
             .send()
             .await?
-            .json::<Account>()
+            .json::<O>()
             .await?;
-        return Ok(account);
+        return Ok(output);
     }
 
     #[cfg(backend)]
     #[allow(unreachable_code)]
     {
-        Ok(Account::default())
+        Ok(Default::default())
     }
 }
 
@@ -399,6 +473,7 @@ async fn call_signup(name: String) -> Result<Account, BackendFnError> {
 struct AppState {
     view: View,
     current_account: Option<Account>,
+    ready: bool,
 }
 
 fn Signup(cx: Scope) -> Element {
@@ -409,7 +484,9 @@ fn Signup(cx: Scope) -> Element {
         to_owned![st];
         cx.spawn({
             async move {
-                if let Ok(account) = call_signup(name).await {
+                if let Ok(account) =
+                    call_route::<SignupParams, Account>(SIGNUP_URL, SignupParams { name }).await
+                {
                     st.with_mut(|st| {
                         st.current_account = Some(account);
                         st.view = View::ShowAccount;
@@ -422,7 +499,7 @@ fn Signup(cx: Scope) -> Element {
         div { class: "max-w-md mx-auto flex flex-col gap-4 pt-16",
             h1 { class: "text-2xl text-gray-950 dark:text-white text-center", "Signup" }
             div { class: "flex flex-col gap-2",
-                TextInput { name: "username", oninput: move |e: FormEvent| name.set(e.value.clone()) }
+                TextInput { name: "username", oninput: move |e: FormEvent| name.set(e.value.clone()), placeholder: "Your username" }
                 Button { onclick: onclick, "Starting posting yall!" }
             }
         }
@@ -430,14 +507,29 @@ fn Signup(cx: Scope) -> Element {
 }
 
 fn Login(cx: Scope) -> Element {
-    let onclick = move |e| {
-        todo!();
+    let login_code = use_state(cx, || String::default());
+    let st = use_atom_state(cx, APP_STATE);
+    let onclick = move |_| {
+        let login_code = login_code.get().clone();
+        to_owned![st];
+        cx.spawn({
+            async move {
+                if let Ok(account) =
+                    call_route::<LoginParams, Account>(LOGIN_URL, LoginParams { login_code }).await
+                {
+                    st.with_mut(|st| {
+                        st.current_account = Some(account);
+                        st.view = View::ShowAccount;
+                    })
+                }
+            }
+        })
     };
     cx.render(rsx! {
         div { class: "max-w-md mx-auto flex flex-col gap-4 pt-16",
             h1 { class: "text-2xl text-gray-950 dark:text-white text-center", "Login" }
             div { class: "flex flex-col gap-2",
-                TextInput { name: "username" }
+                PasswordInput { name: "username", oninput: move |e: FormEvent| login_code.set(e.value.clone()), placeholder: "Your login code here" }
                 Button { onclick: onclick, "Get back in here!" }
             }
         }
@@ -458,19 +550,56 @@ fn ShowAccount(cx: Scope) -> Element {
     };
     let onclick = move |_| {
         to_owned![st];
-        st.with_mut(|s| s.view = View::Posts);
+        cx.spawn({
+            async move {
+                if let Ok(_) =
+                    call_route::<EmptyJson, EmptyJson>(LOGOUT_URL, EmptyJson::default()).await
+                {
+                    st.with_mut(|st| {
+                        st.current_account = None;
+                        st.view = View::Posts;
+                    })
+                }
+            }
+        })
+    };
+    let login_code_class = use_state(cx, || "blur-sm");
+    let toggle_login_code = move |_| {
+        to_owned![login_code_class];
+        if login_code_class == "blur-sm" {
+            login_code_class.set("");
+        } else {
+            login_code_class.set("blur-sm");
+        }
+    };
+    let on_delete_account = move |_| {
+        to_owned![st];
+        cx.spawn(async move {
+            if let Ok(_) =
+                call_route::<EmptyJson, EmptyJson>(DELETE_ACCOUNT_URL, EmptyJson::default()).await
+            {
+                st.with_mut(|st| {
+                    st.current_account = None;
+                    st.view = View::Posts;
+                })
+            }
+        })
     };
     cx.render(rsx! {
         div {
             class: "max-w-md mx-auto flex flex-col gap-4 pt-16",
             h1 { class: "text-2xl text-gray-950 dark:text-white text-center", "Account" }
             div {
-                class: "p-4 dark:bg-cyan-700 dark:text-white",
+                class: "p-4 rounded-md dark:bg-gray-800 dark:text-white bg-gray-100 text-gray-950",
                 p { "This is your login code. This is the only way back into your account." }
                 p { "Keep this code a secret, it's your password!" }
-                p { "{login_code}" }
+                p { class: "{login_code_class} cursor-pointer", onclick: toggle_login_code, "{login_code}" }
             }
-            Button { onclick: onclick, "Blah blah show me the posts!" }
+            div {
+                class: "flex flex-col gap-16",
+                Button { onclick: onclick, "Logout" }
+                a { class: "cursor-pointer", onclick: on_delete_account, "Delete your account" }
+            }
         }
     })
 }
@@ -488,30 +617,85 @@ fn Button<'a>(
     };
     cx.render(rsx! {
         button {
-            class: "text-white bg-indigo-500 px-4 py-3 white rounded-md shadow-md",
+            class: "text-white bg-indigo-500 px-4 py-3 white rounded-md shadow-md hover:bg-indigo-400 transition",
             onclick: onclick,
             children
         }
     })
 }
 
-#[inline_props]
-fn TextInput<'a>(
-    cx: Scope,
+fn fwd_handler<'a, T>(maybe_handler: &'a Option<EventHandler<'a, T>>, e: T)
+where
+    T: Clone,
+{
+    if let Some(handler) = &maybe_handler {
+        handler.call(e.clone());
+    }
+}
+
+#[derive(Props)]
+struct InputProps<'a> {
+    #[props(optional)]
     oninput: Option<EventHandler<'a, FormEvent>>,
+    #[props(optional)]
+    placeholder: Option<&'a str>,
+    #[props(optional)]
+    kind: Option<&'a str>,
     name: &'a str,
-) -> Element {
-    let oninput = move |e: FormEvent| {
-        if let Some(on) = oninput {
-            on.call(e);
-        }
+}
+
+fn Input<'a>(cx: Scope<'a, InputProps<'a>>) -> Element {
+    let InputProps {
+        kind,
+        oninput,
+        placeholder,
+        name,
+    } = cx.props;
+    let kind = match kind {
+        Some(k) => k,
+        None => "text",
     };
     cx.render(rsx! {
         input {
-            r#type: "text",
+            r#type: "{kind}",
             name: "{name}",
-            oninput: oninput,
+            oninput: move |e| fwd_handler(oninput, e),
+            placeholder: placeholder.unwrap_or_default(),
             class: "p-3 rounded-md bg-white outline-none border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white text-gray-950"
+        }
+    })
+}
+
+fn TextInput<'a>(cx: Scope<'a, InputProps<'a>>) -> Element {
+    let InputProps {
+        oninput,
+        placeholder,
+        name,
+        ..
+    } = cx.props;
+    cx.render(rsx! {
+        Input {
+            kind: "text",
+            oninput: move |e| fwd_handler(oninput, e),
+            name: "{name}",
+            placeholder: placeholder.unwrap_or_default()
+        }
+    })
+}
+
+fn PasswordInput<'a>(cx: Scope<'a, InputProps<'a>>) -> Element {
+    let InputProps {
+        oninput,
+        placeholder,
+        name,
+        ..
+    } = cx.props;
+    cx.render(rsx! {
+        Input {
+            kind: "password",
+            oninput: move |e| fwd_handler(oninput, e),
+            name: "{name}",
+            placeholder: placeholder.unwrap_or_default()
         }
     })
 }

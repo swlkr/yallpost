@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 pub const BACKEND_FN_URL: &'static str = "/backend_fn";
+pub const SIGNUP_URL: &'static str = "/signup";
+pub const LOGIN_URL: &'static str = "/login";
+pub const LOGOUT_URL: &'static str = "/logout";
+pub const DELETE_ACCOUNT_URL: &'static str = "/delete_account";
 
 pub mod models {
     use serde::{Deserialize, Serialize};
@@ -322,6 +326,39 @@ pub mod backend {
             .fetch_one(&self.connection)
             .await?;
             Ok(session)
+        }
+
+        pub async fn account_by_login_code(&self, login_code: String) -> Result<Account, AppError> {
+            let account = sqlx::query_as!(
+                Account,
+                "select * from accounts where login_code = ? limit 1",
+                login_code
+            )
+            .fetch_one(&self.connection)
+            .await?;
+            Ok(account)
+        }
+
+        pub async fn delete_session_by_identifier(
+            &self,
+            identifier: &str,
+        ) -> Result<Session, AppError> {
+            let session = sqlx::query_as!(
+                Session,
+                "delete from sessions where identifier = ? returning *",
+                identifier
+            )
+            .fetch_one(&self.connection)
+            .await?;
+            Ok(session)
+        }
+
+        pub async fn delete_account_by_id(&self, id: i64) -> Result<Account, AppError> {
+            let account =
+                sqlx::query_as!(Account, "delete from accounts where id = ? returning *", id)
+                    .fetch_one(&self.connection)
+                    .await?;
+            Ok(account)
         }
     }
 
