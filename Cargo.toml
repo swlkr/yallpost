@@ -3,27 +3,21 @@ name = "yallpost"
 version = "0.1.0"
 edition = "2021"
 
-[workspace]
-members = [
-  "proc_macros",
-]
-
 [dependencies]
 axum = { version = "0.6.18", optional = true, features = ["headers"] }
 tokio = { version = "1.28.2", features = ["full"], optional = true }
 rust-embed = { version = "6.4.2", optional = true }
-thiserror = { version = "1.0.40", optional = true }
+thiserror = { version = "1.0.40" }
 mime_guess = { version = "2.0.4", optional = true }
 dioxus-ssr = { git = "https://github.com/dioxuslabs/dioxus", optional = true }
 dioxus = { git = "https://github.com/dioxuslabs/dioxus" }
 dioxus-web = { git = "https://github.com/dioxuslabs/dioxus", features = ["hydrate"], optional = true }
-dioxus-fullstack = { git = "https://github.com/dioxuslabs/dioxus", features = ["axum", "ssr", "hot-reload"], optional = true }
+dioxus-fullstack = { git = "https://github.com/dioxuslabs/dioxus" }
 fermi = { git = "https://github.com/dioxuslabs/dioxus" }
 wasm-bindgen = { version = "=0.2.87", optional = true }
 gloo-net = { version = "0.3.0", optional = true }
 serde = "1.0.164"
 serde_json = "1.0.97"
-proc_macros = { path = "proc_macros" }
 wasm-logger = { version = "0.2.0", optional = true }
 web-sys = { version = "0.3.62", optional = true }
 log = { version = "0.4.17" }
@@ -35,7 +29,7 @@ nanoid = { version = "0.4.0", optional = true }
 [features]
 default = ["csr"]
 csr = ["dioxus-web", "wasm-bindgen", "gloo-net", "wasm-logger", "web-sys"]
-ssr = ["tokio", "axum", "rust-embed", "mime_guess", "thiserror", "dioxus-ssr", "sqlx", "dioxus-fullstack", "tracing", "tracing-subscriber", "nanoid"]
+ssr = ["tokio", "axum", "rust-embed", "mime_guess", "dioxus-fullstack/axum", "dioxus-ssr", "sqlx", "tracing", "tracing-subscriber", "nanoid"]
 
 [profile.release]
 lto = true
