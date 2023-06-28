@@ -2,7 +2,11 @@
 module.exports = {
   content: ["./src/**/*.rs"],
   theme: {
-    extend: {},
+    extend: {
+      screens: {
+        standalone: { raw: "(display-mode: standalone)" }
+      }
+    },
   },
   plugins: [],
 }

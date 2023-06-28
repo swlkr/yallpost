@@ -874,7 +874,7 @@ fn Nav<'a>(
         }
     };
     cx.render(rsx! {
-        div { class: "dark:bg-gray-900 p-4 bg-gray-200 fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-6",
+        div { class: "dark:bg-gray-900 p-4 bg-gray-200 fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-6 standalone:pb-8",
             div { class: "flex lg:justify-center lg:gap-4 justify-around",
                 a { class: "cursor-pointer", onclick: move |_| onclick.call(View::Posts), "Home" }
                 links
@@ -936,7 +936,7 @@ fn Router(cx: Scope<RouterProps>) -> Element {
             cx.render(rsx! {
                 div { class: "h-screen dark:bg-gray-950 dark:text-white text-gray-950",
                     Nav { onclick: move |r: View| state.with_mut(|s| s.view = r), account: props.account }
-                    div { class: "px-8 md:px-0 h-full", component }
+                    div { class: "px-8 md:px-0 h-full md:pt-24", component }
                 }
             })
         }
