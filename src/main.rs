@@ -518,7 +518,18 @@ mod backend {
         pub async fn insert_account(&self, name: String) -> Result<Account, AppError> {
             let token = nanoid::nanoid!();
             let now = Self::now();
-            let account= sqlx::query_as!(Account, "insert into accounts (name, login_code, updated_at, created_at) values (?, ?, ?, ?) returning *", name, token, now, now).fetch_one(&self.connection).await?;
+            let account= match sqlx::query_as!(Account, "insert into accounts (name, login_code, updated_at, created_at) values (?, ?, ?, ?) returning *", name, token, now, now).fetch_one(&self.connection).await {
+                Ok(a) => a,
+                Err(err) =>  match err {
+                    // this *is* a unique index error
+                    sqlx::Error::Database(err) => if err.is_unique_violation() {
+                        return Err(AppError::DatabaseUniqueIndex);
+                    } else {
+                        return Err(AppError::Database);
+                    }
+                    _ => return Err(AppError::Database),
+                }
+            };
             Ok(account)
         }
 
@@ -697,6 +708,8 @@ pub enum AppError {
     Database,
     #[error("error rolling back latest migration")]
     Rollback,
+    #[error("unique index error")]
+    DatabaseUniqueIndex,
 }
 
 #[derive(Serialize, Default, Deserialize, Copy, Clone, Debug)]
@@ -706,6 +719,7 @@ pub struct SignupState {
     pub less_than_max_len: bool,
     pub greater_than_min_len: bool,
     pub starts_with_letter: bool,
+    pub is_taken: bool,
 }
 
 impl SignupState {
@@ -728,12 +742,14 @@ pub fn validate_name(name: &String) -> SignupState {
         .nth(0)
         .unwrap_or_default()
         .is_ascii_alphabetic();
+    let is_taken = false;
     SignupState {
         is_empty,
         is_alphanumeric,
         less_than_max_len,
         greater_than_min_len,
         starts_with_letter,
+        is_taken,
     }
 }
 
@@ -743,9 +759,18 @@ async fn signup(
     name: String,
 ) -> Result<Result<Account, SignupState>, ServerFnError> {
     let db = use_db(&sx);
-    let signup_state = validate_name(&name);
+    let mut signup_state = validate_name(&name);
     if signup_state.is_valid() {
-        let account = db.insert_account(name).await?;
+        let account = match db.insert_account(name).await {
+            Ok(a) => a,
+            Err(err) => match err {
+                AppError::DatabaseUniqueIndex => {
+                    signup_state.is_taken = true;
+                    return Ok(Err(signup_state));
+                }
+                _ => return Err(ServerFnError::Request("".to_string())),
+            },
+        };
         let session = db.insert_session(account.id).await?;
         sx.response_headers_mut().insert(
             axum::http::header::SET_COOKIE,
@@ -1043,6 +1068,7 @@ fn Signup(cx: Scope) -> Element {
     let name = use_state(cx, || String::default());
     let signup_state = use_state(cx, || SignupState::default());
     let st = use_atom_state(cx, APP_STATE);
+    let loading = use_state(cx, || false);
     let oninput = move |e: FormEvent| {
         let new_name = e.value.clone();
         let ss = validate_name(&new_name);
@@ -1050,37 +1076,24 @@ fn Signup(cx: Scope) -> Element {
         name.set(new_name);
     };
     let onclick = move |_| {
+        loading.set(true);
         let sc = cx.sc();
         let name = name.get().clone();
-        to_owned![st, signup_state];
+        to_owned![st, signup_state, loading];
         cx.spawn({
             async move {
-                match signup(sc, name).await {
+                let result = signup(sc, name).await;
+                loading.set(false);
+                match result {
                     Ok(Ok(account)) => st.with_mut(|st| {
                         st.account = Some(account);
                         st.view = View::ShowAccount;
                     }),
                     Ok(Err(ss)) => signup_state.set(ss),
-                    _ => todo!(),
+                    Err(err) => log::info!("{err}"),
                 }
             }
         })
-    };
-    let badge1 = match signup_state.greater_than_min_len {
-        true => BadgeColor::Green,
-        false => BadgeColor::Gray,
-    };
-    let badge2 = match signup_state.less_than_max_len {
-        true => BadgeColor::Green,
-        false => BadgeColor::Gray,
-    };
-    let badge3 = match signup_state.is_alphanumeric {
-        true => BadgeColor::Green,
-        false => BadgeColor::Gray,
-    };
-    let badge4 = match signup_state.starts_with_letter {
-        true => BadgeColor::Green,
-        false => BadgeColor::Gray,
     };
     cx.render(rsx! {
         div { class: "max-w-md mx-auto flex flex-col gap-4 pt-16",
@@ -1089,31 +1102,42 @@ fn Signup(cx: Scope) -> Element {
                 TextInput { name: "username", oninput: oninput, placeholder: "Your name" }
                 Button { onclick: onclick, "Claim your name" }
                 div { class: "flex flex-wrap gap-2",
-                    Badge { color: badge1, text: "Min 3 chars" }
-                    Badge { color: badge2, text: "Max 20 chars" }
-                    Badge { color: badge3, text: "Letters and numbers" }
-                    Badge { color: badge4, text: "Starts with letter" }
+                    Badge { valid: signup_state.greater_than_min_len, text: "Min 3 chars" }
+                    Badge { valid: signup_state.less_than_max_len, text: "Max 20 chars" }
+                    Badge { valid: signup_state.is_alphanumeric text: "Letters and numbers" }
+                    Badge { valid: signup_state.starts_with_letter, text: "Starts with letter" }
+                    Badge { loading: **loading, invalid: signup_state.is_taken, text: "Taken" }
                 }
             }
         }
     })
 }
 
-enum BadgeColor {
-    Gray,
-    Green,
-}
-
 #[inline_props]
-fn Badge<'a>(cx: Scope, color: BadgeColor, text: &'a str) -> Element {
-    let color_class = match color {
-        BadgeColor::Gray => {
-            "dark:bg-gray-400/10 dark:text-gray-400 dark:ring-gray-400/20 bg-gray-50 text-gray-600 ring-gray-500/10"
-        }
-        BadgeColor::Green => "dark:bg-green-500/10 dark:text-green-400 dark:ring-green-500/20 bg-green-50 text-green-600 ring-green-500/10",
+fn Badge<'a>(
+    cx: Scope,
+    valid: Option<bool>,
+    invalid: Option<bool>,
+    loading: Option<bool>,
+    text: &'a str,
+) -> Element {
+    let text = match loading {
+        Some(true) => "...",
+        Some(false) | None => text,
+    };
+    let default_color = "dark:bg-gray-400/10 dark:text-gray-400 dark:ring-gray-400/20 bg-gray-50 text-gray-600 ring-gray-500/10";
+    let color_class = match valid {
+        Some(true) => "dark:bg-green-500/10 dark:text-green-400 dark:ring-green-500/20 bg-green-50 text-green-600 ring-green-500/10",
+        Some(false) => default_color,
+        None => ""
+    };
+    let color_class = match invalid {
+        Some(true) => "dark:bg-red-500/10 dark:text-red-400 dark:ring-red-500/20 bg-red-50 text-red-600 ring-red-500/10",
+        Some(false) => default_color,
+        _ => color_class
     };
     cx.render(rsx! {
-        span { class: "inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset {color_class}",
+        span { class: "inline-flex items-center rounded-md px-2 py-1 font-medium ring-1 ring-inset {color_class}",
             "{text}"
         }
     })
