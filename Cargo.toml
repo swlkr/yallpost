@@ -40,3 +40,9 @@ codegen-units = 1
 
 [build-dependencies]
 cfg_aliases = "0.1"
+
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.dev.package.sqlx-macros]
+opt-level = 3

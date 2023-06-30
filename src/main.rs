@@ -153,6 +153,7 @@ mod backend {
             RouterProps {
                 account: current_account.clone(),
                 posts: posts.clone(),
+                ..Default::default()
             },
         );
         let _ = vdom.rebuild();
@@ -287,6 +288,7 @@ mod backend {
         let initial_props = &serde_json::to_string(&RouterProps {
             account: account.clone().unwrap_or_default(),
             posts: posts.clone(),
+            ..Default::default()
         })
         .unwrap()
         .replace("\"", "&quot;");
@@ -713,43 +715,42 @@ pub enum AppError {
 }
 
 #[derive(Serialize, Default, Deserialize, Copy, Clone, Debug)]
-pub struct SignupState {
-    pub is_empty: bool,
-    pub is_alphanumeric: bool,
-    pub less_than_max_len: bool,
-    pub greater_than_min_len: bool,
-    pub starts_with_letter: bool,
-    pub is_taken: bool,
+pub struct SignupName {
+    pub is_empty: SignupNameState,
+    pub is_alphanumeric: SignupNameState,
+    pub less_than_max_len: SignupNameState,
+    pub greater_than_min_len: SignupNameState,
+    pub starts_with_letter: SignupNameState,
+    pub is_available: SignupNameState,
 }
 
-impl SignupState {
-    fn is_valid(&self) -> bool {
-        !self.is_empty
-            && self.is_alphanumeric
-            && self.less_than_max_len
-            && self.greater_than_min_len
-            && self.starts_with_letter
-    }
-}
-
-pub fn validate_name(name: &String) -> SignupState {
-    let is_empty = name.is_empty();
-    let is_alphanumeric = name.chars().all(|c| c.is_ascii_alphanumeric());
-    let greater_than_min_len = name.len() >= 3;
-    let less_than_max_len = name.len() <= 20;
+pub fn validate_name(name: &String) -> SignupName {
+    let is_empty = name.is_empty().into();
+    let is_alphanumeric = name.chars().all(|c| c.is_ascii_alphanumeric()).into();
+    let greater_than_min_len = (name.len() >= 3).into();
+    let less_than_max_len = (name.len() <= 20).into();
     let starts_with_letter = name
         .chars()
         .nth(0)
         .unwrap_or_default()
-        .is_ascii_alphabetic();
-    let is_taken = false;
-    SignupState {
+        .is_ascii_alphabetic()
+        .into();
+    SignupName {
         is_empty,
         is_alphanumeric,
         less_than_max_len,
         greater_than_min_len,
         starts_with_letter,
-        is_taken,
+        ..Default::default()
+    }
+}
+
+impl From<bool> for SignupNameState {
+    fn from(value: bool) -> Self {
+        match value {
+            true => SignupNameState::Valid,
+            false => SignupNameState::Initial,
+        }
     }
 }
 
@@ -757,29 +758,25 @@ pub fn validate_name(name: &String) -> SignupState {
 async fn signup(
     sx: DioxusServerContext,
     name: String,
-) -> Result<Result<Account, SignupState>, ServerFnError> {
+) -> Result<Result<Account, SignupName>, ServerFnError> {
     let db = use_db(&sx);
-    let mut signup_state = validate_name(&name);
-    if signup_state.is_valid() {
-        let account = match db.insert_account(name).await {
-            Ok(a) => a,
-            Err(err) => match err {
-                AppError::DatabaseUniqueIndex => {
-                    signup_state.is_taken = true;
-                    return Ok(Err(signup_state));
-                }
-                _ => return Err(ServerFnError::Request("".to_string())),
-            },
-        };
-        let session = db.insert_session(account.id).await?;
-        sx.response_headers_mut().insert(
-            axum::http::header::SET_COOKIE,
-            axum::http::HeaderValue::from_str(backend::set_cookie(session).as_str()).unwrap(),
-        );
-        Ok(Ok(account))
-    } else {
-        Ok(Err(signup_state))
-    }
+    let mut signup_name = validate_name(&name);
+    let account = match db.insert_account(name).await {
+        Ok(a) => a,
+        Err(err) => match err {
+            AppError::DatabaseUniqueIndex => {
+                signup_name.is_available = SignupNameState::Invalid;
+                return Ok(Err(signup_name));
+            }
+            _ => return Err(ServerFnError::Request("".to_string())),
+        },
+    };
+    let session = db.insert_session(account.id).await?;
+    sx.response_headers_mut().insert(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(backend::set_cookie(session).as_str()).unwrap(),
+    );
+    Ok(Ok(account))
 }
 
 impl From<AppError> for ServerFnError {
@@ -878,7 +875,7 @@ enum View {
 fn Nav<'a>(
     cx: Scope,
     onclick: EventHandler<'a, View>,
-    account: Option<Option<Account>>,
+    account: Option<&'a Option<Account>>,
 ) -> Element {
     let st = use_read(cx, APP_STATE);
     let is_logged_in = match account {
@@ -910,8 +907,10 @@ fn Nav<'a>(
 
 #[derive(Props, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct RouterProps {
+    #[props(!optional)]
     account: Option<Account>,
     posts: Vec<Post>,
+    view: View,
 }
 
 #[allow(unreachable_code)]
@@ -935,52 +934,70 @@ static APP_STATE: Atom<AppState> = |_| AppState::default();
 
 fn Router(cx: Scope<RouterProps>) -> Element {
     use_init_atom_root(cx);
-    let state = use_atom_state(cx, APP_STATE);
+    let app_state = use_atom_state(cx, APP_STATE);
     let props = match initial_props() {
         Some(p) => p,
         None => cx.props.clone(),
     };
     let future = use_future(cx, (), |_| {
-        to_owned![state, props];
+        to_owned![app_state, props];
         async move {
-            state.with_mut(|s| {
+            app_state.with_mut(|s| {
                 s.account = props.account.clone();
                 s.posts = props.posts.clone();
                 s.ready = true;
             })
         }
     });
-    match future.value() {
-        _ => {
-            let component = match state.view {
-                View::Posts => rsx! { Posts { posts: props.posts.clone() } },
-                View::Login => rsx! { Login {} },
-                View::Signup => rsx! { Signup {} },
-                View::ShowAccount => rsx! { ShowAccount {} },
-            };
-            cx.render(rsx! {
-                div { class: "h-screen dark:bg-gray-950 dark:text-white text-gray-950",
-                    Nav { onclick: move |r: View| state.with_mut(|s| s.view = r), account: props.account }
-                    div { class: "px-8 md:px-0 h-full md:pt-24", component }
-                }
-            })
+    cx.render(rsx! {
+        match future.value() {
+            Some(_) => rsx! { Root { account: app_state.account.clone(), posts: app_state.posts.clone(), view: app_state.view.clone() } },
+            None => rsx! { Root { account: props.account, posts: props.posts, view: props.view } },
         }
-    }
+    })
+}
+
+fn Root<'a>(cx: Scope<'a, RouterProps>) -> Element {
+    let app_state = use_atom_state(cx, APP_STATE);
+    let RouterProps {
+        account,
+        posts,
+        view,
+    } = cx.props;
+    let component = match view {
+        View::Posts => {
+            rsx! { Posts { posts: posts, account: account } }
+        }
+        View::Login => rsx! { Login {} },
+        View::Signup => rsx! { Signup {} },
+        View::ShowAccount => rsx! { ShowAccount {} },
+    };
+    cx.render(rsx! {
+        div { class: "dark:bg-gray-950 dark:text-white text-gray-950",
+            Nav { onclick: move |r: View| app_state.with_mut(|s| s.view = r), account: account }
+            div { class: "min-h-screen px-8 md:px-0 md:pt-24", component }
+        }
+    })
 }
 
 #[inline_props]
-fn Posts(cx: Scope, posts: Vec<Post>) -> Element {
+fn Posts<'a>(cx: Scope, account: Option<&'a Option<Account>>, posts: &'a Vec<Post>) -> Element {
     let st = use_atom_state(cx, APP_STATE);
     let show_sheet = move |_| {
         st.with_mut(|st| st.sheet_shown = !st.sheet_shown);
     };
-    let posts = match st.ready {
-        true => st.posts.clone(),
-        false => posts.clone(),
+    let (account, posts) = match st.ready {
+        true => (&st.account, &st.posts),
+        false => (
+            match account {
+                Some(a) => a,
+                None => &None,
+            },
+            *posts,
+        ),
     };
-    let account = &st.account;
     cx.render(rsx! {
-        div { class: "max-w-md mx-auto h-full",
+        div { class: "max-w-md mx-auto",
             if posts.is_empty() {
                 rsx! {
                     div { "It's quiet in here... Too quiet" }
@@ -988,7 +1005,6 @@ fn Posts(cx: Scope, posts: Vec<Post>) -> Element {
             } else {
                 rsx! {
                     div {
-                        class: "snap-mandatory snap-y h-full overflow-y-auto",
                         for post in posts {
                             ShowPost { key: "{post.id}", post: post }
                         }
@@ -1010,9 +1026,9 @@ fn Posts(cx: Scope, posts: Vec<Post>) -> Element {
 }
 
 #[inline_props]
-fn ShowPost(cx: Scope, post: Post) -> Element {
+fn ShowPost<'a>(cx: Scope, post: &'a Post) -> Element {
     cx.render(rsx! {
-        div { class: "snap-start h-full py-4",
+        div { class: "min-h-screen py-4 dark:bg-gray-950",
             h1 { class: "text-4xl font-bold", "{post.title}" }
             div { class: "", "{post.body}" }
         }
@@ -1064,37 +1080,52 @@ struct AppState {
     sheet_shown: bool,
 }
 
+#[derive(Default, Clone)]
+struct SignupState {
+    name: String,
+    loading: bool,
+    signup_name: SignupName,
+}
+
 fn Signup(cx: Scope) -> Element {
-    let name = use_state(cx, || String::default());
-    let signup_state = use_state(cx, || SignupState::default());
-    let st = use_atom_state(cx, APP_STATE);
-    let loading = use_state(cx, || false);
+    let app_state = use_atom_state(cx, APP_STATE);
+    let state = use_state(cx, || SignupState::default());
     let oninput = move |e: FormEvent| {
-        let new_name = e.value.clone();
-        let ss = validate_name(&new_name);
-        signup_state.set(ss);
-        name.set(new_name);
+        to_owned![state];
+        state.with_mut(|st| {
+            st.name = e.value.clone();
+            st.signup_name = validate_name(&e.value);
+        });
     };
     let onclick = move |_| {
-        loading.set(true);
         let sc = cx.sc();
-        let name = name.get().clone();
-        to_owned![st, signup_state, loading];
+        to_owned![state, app_state];
         cx.spawn({
             async move {
-                let result = signup(sc, name).await;
-                loading.set(false);
+                state.with_mut(|st| st.loading = true);
+                let result = signup(sc, state.name.clone()).await;
                 match result {
-                    Ok(Ok(account)) => st.with_mut(|st| {
+                    Ok(Ok(account)) => app_state.with_mut(|st| {
                         st.account = Some(account);
                         st.view = View::ShowAccount;
                     }),
-                    Ok(Err(ss)) => signup_state.set(ss),
+                    Ok(Err(sn)) => state.with_mut(|st| {
+                        st.loading = false;
+                        st.signup_name = sn;
+                    }),
                     Err(err) => log::info!("{err}"),
                 }
             }
         })
     };
+    let SignupName {
+        is_alphanumeric,
+        less_than_max_len,
+        greater_than_min_len,
+        starts_with_letter,
+        is_available,
+        ..
+    } = state.signup_name;
     cx.render(rsx! {
         div { class: "max-w-md mx-auto flex flex-col gap-4 pt-16",
             h1 { class: "text-2xl text-gray-950 dark:text-white text-center", "Signup" }
@@ -1102,39 +1133,39 @@ fn Signup(cx: Scope) -> Element {
                 TextInput { name: "username", oninput: oninput, placeholder: "Your name" }
                 Button { onclick: onclick, "Claim your name" }
                 div { class: "flex flex-wrap gap-2",
-                    Badge { valid: signup_state.greater_than_min_len, text: "Min 3 chars" }
-                    Badge { valid: signup_state.less_than_max_len, text: "Max 20 chars" }
-                    Badge { valid: signup_state.is_alphanumeric text: "Letters and numbers" }
-                    Badge { valid: signup_state.starts_with_letter, text: "Starts with letter" }
-                    Badge { loading: **loading, invalid: signup_state.is_taken, text: "Taken" }
+                    Badge { state: greater_than_min_len, text: "Min 3 chars" }
+                    Badge { state: less_than_max_len, text: "Max 20 chars" }
+                    Badge { state: is_alphanumeric, text: "Letters and numbers" }
+                    Badge { state: starts_with_letter, text: "Starts with letter" }
+                    if state.loading {
+                        rsx! {
+                            Badge { state: SignupNameState::Initial, text: "..." }
+                        }
+                    } else {
+                        rsx! {
+                            Badge { state: is_available, text: "Available" }
+                        }
+                    }
                 }
             }
         }
     })
 }
 
+#[derive(Default, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+pub enum SignupNameState {
+    Valid,
+    Invalid,
+    #[default]
+    Initial,
+}
+
 #[inline_props]
-fn Badge<'a>(
-    cx: Scope,
-    valid: Option<bool>,
-    invalid: Option<bool>,
-    loading: Option<bool>,
-    text: &'a str,
-) -> Element {
-    let text = match loading {
-        Some(true) => "...",
-        Some(false) | None => text,
-    };
-    let default_color = "dark:bg-gray-400/10 dark:text-gray-400 dark:ring-gray-400/20 bg-gray-50 text-gray-600 ring-gray-500/10";
-    let color_class = match valid {
-        Some(true) => "dark:bg-green-500/10 dark:text-green-400 dark:ring-green-500/20 bg-green-50 text-green-600 ring-green-500/10",
-        Some(false) => default_color,
-        None => ""
-    };
-    let color_class = match invalid {
-        Some(true) => "dark:bg-red-500/10 dark:text-red-400 dark:ring-red-500/20 bg-red-50 text-red-600 ring-red-500/10",
-        Some(false) => default_color,
-        _ => color_class
+fn Badge<'a>(cx: Scope, state: SignupNameState, text: &'a str) -> Element {
+    let color_class = match state {
+        SignupNameState::Valid => "dark:bg-green-500/10 dark:text-green-400 dark:ring-green-500/20 bg-green-50 text-green-600 ring-green-500/10",
+        SignupNameState::Initial => "dark:bg-gray-400/10 dark:text-gray-400 dark:ring-gray-400/20 bg-gray-50 text-gray-600 ring-gray-500/10",
+        SignupNameState::Invalid => "dark:bg-red-500/10 dark:text-red-400 dark:ring-red-500/20 bg-red-50 text-red-600 ring-red-500/10",
     };
     cx.render(rsx! {
         span { class: "inline-flex items-center rounded-md px-2 py-1 font-medium ring-1 ring-inset {color_class}",
@@ -1249,7 +1280,7 @@ fn Button<'a>(cx: Scope<'a, ButtonProps<'a>>) -> Element {
     let onclick = move |e| fwd_handler(onclick, e);
     cx.render(rsx! {
         button {
-            class: "text-white bg-cyan-500 px-4 py-3 white rounded-md shadow-md hover:bg-cyan-400 transition",
+            class: "text-white bg-indigo-500 px-4 py-3 white rounded-md shadow-md hover:bg-indigo-400 transition",
             onclick: onclick,
             children
         }
@@ -1397,7 +1428,7 @@ fn Fab<'a>(cx: Scope<'a, ButtonProps<'a>>) -> Element {
     cx.render(rsx! {
         div { class: "fixed bottom-24 right-4 z-20",
             button {
-                class: "h-12 w-12 rounded-full bg-cyan-400 text-white box-shadow-md shadow-cyan-600 hover:box-shadow-xs hover:top-0.5 active:shadow-none active:top-1 relative",
+                class: "h-12 w-12 rounded-full bg-indigo-400 text-white box-shadow-md shadow-indigo-600 hover:box-shadow-xs hover:top-0.5 active:shadow-none active:top-1 relative",
                 onclick: onclick,
                 children
             }
