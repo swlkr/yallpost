@@ -896,7 +896,7 @@ fn Nav<'a>(
         }
     };
     cx.render(rsx! {
-        div { class: "dark:bg-gray-900 p-4 bg-gray-200 fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-6 standalone:pb-8",
+        div { class: "dark:bg-gray-900 p-4 bg-gray-200 fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-6 standalone:pb-8 z-30",
             div { class: "flex lg:justify-center lg:gap-4 justify-around",
                 a { class: "cursor-pointer", onclick: move |_| onclick.call(View::Posts), "Home" }
                 links
@@ -975,7 +975,7 @@ fn Root<'a>(cx: Scope<'a, RouterProps>) -> Element {
     cx.render(rsx! {
         div { class: "dark:bg-gray-950 dark:text-white text-gray-950",
             Nav { onclick: move |r: View| app_state.with_mut(|s| s.view = r), account: account }
-            div { class: "min-h-screen px-8 md:px-0 md:pt-24", component }
+            div { class: "md:pt-24", component }
         }
     })
 }
@@ -996,6 +996,11 @@ fn Posts<'a>(cx: Scope, account: Option<&'a Option<Account>>, posts: &'a Vec<Pos
             *posts,
         ),
     };
+    let cards = posts
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (i + 1, p))
+        .collect::<Vec<(usize, &Post)>>();
     cx.render(rsx! {
         div { class: "max-w-md mx-auto",
             if posts.is_empty() {
@@ -1005,8 +1010,14 @@ fn Posts<'a>(cx: Scope, account: Option<&'a Option<Account>>, posts: &'a Vec<Pos
             } else {
                 rsx! {
                     div {
-                        for post in posts {
-                            ShowPost { key: "{post.id}", post: post }
+                        class: "pt-4 px-4",
+                        for card in cards {
+                            StackableCard {
+                                offset: card.0,
+                                Card {
+                                    ShowPost { key: "{card.1.id}", post: card.1 }
+                                }
+                            }
                         }
                     }
                 }
@@ -1028,7 +1039,7 @@ fn Posts<'a>(cx: Scope, account: Option<&'a Option<Account>>, posts: &'a Vec<Pos
 #[inline_props]
 fn ShowPost<'a>(cx: Scope, post: &'a Post) -> Element {
     cx.render(rsx! {
-        div { class: "min-h-screen py-4 dark:bg-gray-950",
+        div { class: "h-full flex items-center justify-center flex-col",
             h1 { class: "text-4xl font-bold", "{post.title}" }
             div { class: "", "{post.body}" }
         }
@@ -1260,7 +1271,7 @@ fn ShowAccount(cx: Scope) -> Element {
         })
     };
     cx.render(rsx! {
-        div { class: "max-w-md mx-auto flex flex-col gap-4 pt-16",
+        div { class: "max-w-md mx-auto flex flex-col gap-4 pt-16 px-4 md:px-0 min-h-screen",
             h1 { class: "text-2xl text-gray-950 dark:text-white text-center", "Account" }
             div { class: "p-4 rounded-md dark:bg-gray-800 dark:text-white bg-gray-100 text-gray-950",
                 p { "This is your login code. This is the only way back into your account." }
@@ -1432,6 +1443,27 @@ fn Fab<'a>(cx: Scope<'a, ButtonProps<'a>>) -> Element {
                 onclick: onclick,
                 children
             }
+        }
+    })
+}
+
+#[inline_props]
+fn StackableCard<'a>(cx: Scope, offset: usize, children: Element<'a>) -> Element {
+    cx.render(rsx! {
+        div {
+            class: "sticky",
+            style: "height: calc(100vh - {offset}rem); top: {offset}rem",
+            children
+        }
+    })
+}
+
+#[inline_props]
+fn Card<'a>(cx: Scope, children: Element<'a>) -> Element {
+    cx.render(rsx! {
+        div {
+            class: "h-full rounded-xl dark:bg-gray-800 p-3 border-gray-950 border",
+            children
         }
     })
 }
