@@ -1,5 +1,4 @@
 #![allow(non_snake_case)]
-use std::{fmt::Display, rc::Rc};
 
 /*
 
@@ -14,6 +13,7 @@ use dioxus_fullstack::prelude::*;
 use fermi::prelude::*;
 use models::{Account, Post, Session};
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use thiserror;
 
 fn main() {
@@ -83,30 +83,20 @@ mod backend {
                 db.rollback().await.expect("Error rolling back");
             }
             "frontend" => {
-                let mut index_html = std::fs::read_to_string("./dist/index.html").unwrap();
+                let mut html = std::fs::read_to_string("./dist/index.html").unwrap();
+                html = html.replace(r#"<script src="https://cdn.tailwindcss.com"></script>"#, "");
                 for asset in Assets::iter() {
                     let path = asset.as_ref();
                     if let Some(file) = Assets::get(path) {
                         let last_modified = file.metadata.last_modified().unwrap_or_default();
-                        index_html = index_html
-                            .replace(path, format!("{}?v={}", path, last_modified).as_ref());
+                        html = html.replace(path, format!("{}?v={}", path, last_modified).as_ref());
                     }
                 }
-                match std::fs::write("./dist/index.html", index_html) {
+                match std::fs::write("./dist/index.html", html) {
                     Ok(_) => {}
                     Err(err) => println!("{}", err),
                 }
                 // need to delete tailwind cdn
-                #[cfg(not(debug_assertions))]
-                {
-                    let html = std::fs::read_to_string("./dist/index.html").unwrap();
-                    let html =
-                        html.replace(r#"<script src="https://cdn.tailwindcss.com"></script>"#, "");
-                    match std::fs::write("./dist/index.html", html) {
-                        Ok(_) => {}
-                        Err(err) => println!("{}", err),
-                    }
-                }
             }
             _ => {
                 let env = Env::new();
@@ -754,7 +744,6 @@ static READY: Atom<bool> = |_| false;
 static ACCOUNT: Atom<Option<Account>> = |_| None;
 static VIEW: Atom<View> = |_| Default::default();
 static POSTS: Atom<Vec<Post>> = |_| Default::default();
-static SHEET_SHOWN: Atom<bool> = |_| false;
 
 fn Router(cx: Scope<ServerProps>) -> Element {
     use_init_atom_root(cx);
@@ -812,14 +801,10 @@ fn Root(cx: Scope) -> Element {
     })
 }
 
-fn use_rw_state<T: 'static>(cx: Scope, atom: Atom<T>) -> (&Rc<dyn Fn(T)>, &T) {
-    (use_set(cx, atom), use_read(cx, atom))
-}
-
 fn Posts(cx: Scope) -> Element {
-    let (set_sheet_shown, sheet_shown) = use_rw_state(cx, SHEET_SHOWN);
+    let shown = use_state(cx, || false);
     let show_sheet = move |_| {
-        set_sheet_shown(!sheet_shown);
+        shown.set(!*shown.get());
     };
     let posts = use_app_state(cx, POSTS);
     let num_posts = posts.len();
@@ -835,7 +820,7 @@ fn Posts(cx: Scope) -> Element {
         div { class: "max-w-md mx-auto",
             posts,
             Fab { onclick: show_sheet, "+" }
-            Sheet { shown: *sheet_shown, onclose: move |_| set_sheet_shown(false), NewPost {} }
+            Sheet { shown: *shown.get(), onclose: move |_| shown.set(false), NewPost {} }
         }
     })
 }
@@ -852,17 +837,15 @@ fn ShowPost(cx: Scope, post: Post) -> Element {
 
 fn NewPost(cx: Scope) -> Element {
     let posts_state = use_atom_state(cx, POSTS);
-    let sheet_shown = use_atom_state(cx, SHEET_SHOWN);
     let title = use_state(cx, || "".to_string());
     let body = use_state(cx, || "".to_string());
     let on_add = move |_| {
-        to_owned![title, body, posts_state, sheet_shown];
+        to_owned![title, body, posts_state];
         let sc = cx.sc();
         cx.spawn(async move {
             match add_post(sc, title.get().clone(), body.get().clone()).await {
                 Ok(Some(new_post)) => {
                     posts_state.with_mut(|p| p.insert(0, new_post));
-                    sheet_shown.set(false);
                 }
                 Ok(None) => todo!(),
                 Err(_) => todo!(),
@@ -1197,12 +1180,7 @@ fn PasswordInput<'a>(cx: Scope<'a, InputProps<'a>>) -> Element {
 }
 
 #[inline_props]
-fn Sheet<'a>(
-    cx: Scope,
-    shown: bool,
-    onclose: EventHandler<'a>,
-    children: Element<'a>,
-) -> Element<'a> {
+fn Sheet<'a>(cx: Scope, shown: bool, onclose: EventHandler<'a>, children: Element<'a>) -> Element {
     let translate_y = match shown {
         true => "",
         false => "translate-y-full",
