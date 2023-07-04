@@ -67,16 +67,19 @@ mod backend {
     #[tokio::main]
     pub async fn main() {
         tracing_subscriber::fmt().init();
+        #[cfg(debug_assertions)]
         dioxus_hot_reload::hot_reload_init!();
-        let env = Env::new();
-        let db = Database::new(env.database_url.clone()).await;
         let args: Vec<String> = std::env::args().collect();
         let arg = args.get(1).cloned().unwrap_or(String::default());
         match arg.as_str() {
             "migrate" => {
+                let env = Env::new();
+                let db = Database::new(env.database_url.clone()).await;
                 db.migrate().await.expect("Error migrating");
             }
             "rollback" => {
+                let env = Env::new();
+                let db = Database::new(env.database_url.clone()).await;
                 db.rollback().await.expect("Error rolling back");
             }
             "frontend" => {
@@ -99,6 +102,8 @@ mod backend {
                 }
             }
             _ => {
+                let env = Env::new();
+                let db = Database::new(env.database_url.clone()).await;
                 let _ = db.migrate().await.expect("Problem running migrations");
                 let app = routes(db);
                 let addr: SocketAddr = "127.0.0.1:9004".parse().expect("Problem parsing address");
