@@ -84,10 +84,6 @@ mod backend {
             }
             "frontend" => {
                 let mut index_html = std::fs::read_to_string("./dist/index.html").unwrap();
-                // need to delete tailwind cdn
-                #[cfg(not(debug_assertions))]
-                let index_html = index_html
-                    .replace(r#"<script src="https://cdn.tailwindcss.com"></script>"#, "");
                 for asset in Assets::iter() {
                     let path = asset.as_ref();
                     if let Some(file) = Assets::get(path) {
@@ -99,6 +95,17 @@ mod backend {
                 match std::fs::write("./dist/index.html", index_html) {
                     Ok(_) => {}
                     Err(err) => println!("{}", err),
+                }
+                // need to delete tailwind cdn
+                #[cfg(not(debug_assertions))]
+                {
+                    let html = std::fs::read_to_string("./dist/index.html").unwrap();
+                    let html =
+                        html.replace(r#"<script src="https://cdn.tailwindcss.com"></script>"#, "");
+                    match std::fs::write("./dist/index.html", html) {
+                        Ok(_) => {}
+                        Err(err) => println!("{}", err),
+                    }
                 }
             }
             _ => {
