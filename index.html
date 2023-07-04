@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>yallpost</title>
+  <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8" />
+  <title>yallpost</title>
+  <link rel="icon" href="./assets/favicon.ico" sizes="48x48" />
+  <link rel="icon" href="./assets/safari-pinned-tab.svg" sizes="any" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png" />
+  <link rel="manifest" href="./assets/site.webmanifest" />
+  <link rel="stylesheet" href="./assets/tailwind.css" />
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body>
+  <div id="main"><!-- app --></div>
+  <input type="hidden" id="props" value="<!-- props -->" />
+  <script type="module">
+    import init from "/./assets/dioxus/dioxus.js";
+    init("/./assets/dioxus/dioxus_bg.wasm").then(wasm => {
+      if (wasm.__wbindgen_start == undefined) {
+        wasm.main();
+      }
+    });
+  </script>
+
+</body>
+
+</html>

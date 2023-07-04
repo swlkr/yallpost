@@ -68,23 +68,39 @@ mod backend {
     pub async fn main() {
         tracing_subscriber::fmt().init();
         dioxus_hot_reload::hot_reload_init!();
-        let state = BackendState::new().await;
+        let env = Env::new();
+        let db = Database::new(env.database_url.clone()).await;
         let args: Vec<String> = std::env::args().collect();
         let arg = args.get(1).cloned().unwrap_or(String::default());
         match arg.as_str() {
             "migrate" => {
-                state.db.migrate().await.expect("Error migrating");
+                db.migrate().await.expect("Error migrating");
             }
             "rollback" => {
-                state.db.rollback().await.expect("Error rolling back");
+                db.rollback().await.expect("Error rolling back");
+            }
+            "frontend" => {
+                let mut index_html = std::fs::read_to_string("./dist/index.html").unwrap();
+                // need to delete tailwind cdn
+                #[cfg(not(debug_assertions))]
+                let index_html = index_html
+                    .replace(r#"<script src="https://cdn.tailwindcss.com"></script>"#, "");
+                for asset in Assets::iter() {
+                    let path = asset.as_ref();
+                    if let Some(file) = Assets::get(path) {
+                        let last_modified = file.metadata.last_modified().unwrap_or_default();
+                        index_html = index_html
+                            .replace(path, format!("{}?v={}", path, last_modified).as_ref());
+                    }
+                }
+                match std::fs::write("./dist/index.html", index_html) {
+                    Ok(_) => {}
+                    Err(err) => println!("{}", err),
+                }
             }
             _ => {
-                let _ = state
-                    .db
-                    .migrate()
-                    .await
-                    .expect("Problem running migrations");
-                let app = routes(state);
+                let _ = db.migrate().await.expect("Problem running migrations");
+                let app = routes(db);
                 let addr: SocketAddr = "127.0.0.1:9004".parse().expect("Problem parsing address");
                 println!("listening on {}", addr);
                 Server::bind(&addr)
@@ -95,11 +111,11 @@ mod backend {
         };
     }
 
-    fn routes(state: BackendState) -> Router {
+    fn routes(db: Database) -> Router {
         let dynamic_routes = Router::new()
             .route("/", get(index))
             .register_server_fns_with_handler("", |func| {
-                move |State(BackendState { db, .. }): State<BackendState>,
+                move |State(db): State<Database>,
                       TypedHeader(cookie): TypedHeader<Cookie>,
                       req: Request<Body>| async move {
                     let (parts, body) = req.into_parts();
@@ -126,7 +142,7 @@ mod backend {
                 }
             })
             .connect_hot_reload()
-            .with_state(state);
+            .with_state(db);
         let static_routes = Router::new().route("/assets/*file", get(serve_assets));
 
         Router::new()
@@ -137,40 +153,33 @@ mod backend {
 
     async fn index(
         TypedHeader(cookie): TypedHeader<Cookie>,
-        State(state): State<BackendState>,
+        State(db): State<Database>,
     ) -> Html<String> {
-        let BackendState { assets, db } = state;
-        let session = match cookie.get("id") {
-            Some(identifier) => db.session_by_identifer(identifier).await.ok(),
-            None => None,
-        };
-        let current_account = if let Some(s) = session {
-            db.account_by_id(s.account_id).await.ok()
-        } else {
-            None
-        };
+        let identifier = cookie.get("id").unwrap_or_default();
+        let session = db.session_by_identifer(identifier).await.ok();
+        let account = db
+            .account_by_id(session.unwrap_or_default().account_id)
+            .await
+            .ok();
         let posts = db.posts().await.unwrap_or_default();
-        let mut vdom = VirtualDom::new_with_props(
-            Router,
-            ServerProps {
-                account: current_account.clone(),
-                posts: posts.clone(),
-                ..Default::default()
-            },
-        );
+        let view = View::default();
+        let server_props = ServerProps {
+            account,
+            posts,
+            view,
+        };
+        let mut vdom = VirtualDom::new_with_props(Router, server_props.clone());
         let _ = vdom.rebuild();
         let app = dioxus_ssr::pre_render(&vdom);
-        Html(format!(
-            "<!DOCTYPE html>{}",
-            dioxus_ssr::render_lazy(rsx! {
-                Layout {
-                    assets: assets
-                    app: app,
-                    account: current_account,
-                    posts: posts.clone()
-                }
-            })
-        ))
+        let index_html = std::fs::read_to_string("./dist/index.html").unwrap();
+        let index_html = index_html.replace("<!-- app -->", &app);
+        let index_html = index_html.replace(
+            "<!-- props -->",
+            &serde_json::to_string(&server_props)
+                .unwrap()
+                .replace("\"", "&quot;"),
+        );
+        Html(index_html)
     }
 
     async fn serve_assets(uri: Uri) -> impl IntoResponse {
@@ -186,7 +195,7 @@ mod backend {
     }
 
     pub fn set_cookie(session: Session) -> String {
-        #[cfg(not(debug_assertions))]
+        #[allow(unused_variables)]
         let secure = "Secure;";
         #[cfg(debug_assertions)]
         let secure = "";
@@ -195,74 +204,6 @@ mod backend {
             "{}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2629746; {}",
             "id", session.identifier, secure
         )
-    }
-
-    #[inline_props]
-    fn Head<'a>(cx: Scope, assets: &'a AssetMap) -> Element {
-        #[cfg(debug_assertions)]
-        let tailwind = rsx! { script { src: "https://cdn.tailwindcss.com" } };
-        #[cfg(not(debug_assertions))]
-        let tailwind = rsx! { link { href: "{assets.tailwind}", rel: "stylesheet" } };
-        cx.render(rsx! {
-            head {
-                meta { charset: "UTF-8" }
-                meta { name: "viewport", content: "width=device-width, initial-scale=1" }
-                meta { content: "text/html;charset=utf-8", http_equiv: "Content-Type" }
-                title { "yallpost" }
-                link { rel: "icon", href: "{assets.favicon_ico}", sizes: "48x48" }
-                link {
-                    rel: "icon",
-                    href: "{assets.favicon_svg}",
-                    sizes: "any",
-                    r#type: "image/svg+xml"
-                }
-                link { rel: "apple-touch-icon", href: "{assets.apple_touch_icon}" }
-                link { rel: "manifest", href: "{assets.manifest}" }
-                tailwind
-            }
-        })
-    }
-
-    #[allow(unused_variables)]
-    #[inline_props]
-    fn Layout(
-        cx: Scope,
-        assets: AssetMap,
-        account: Option<Option<Account>>,
-        posts: Vec<Post>,
-        app: String,
-    ) -> Element {
-        let LayoutProps {
-            assets,
-            app,
-            account,
-            posts,
-        } = cx.props;
-        let js = format!(
-            r#"import init from "/./{}";
-               init("/./{}").then(wasm => {{
-                 if (wasm.__wbindgen_start == undefined) {{
-                   wasm.main();
-                 }}
-               }});"#,
-            assets.dioxus, assets.dioxus_bg
-        );
-        let server_props = &serde_json::to_string(&ServerProps {
-            account: account.clone().unwrap_or_default(),
-            posts: posts.clone(),
-            ..Default::default()
-        })
-        .unwrap()
-        .replace("\"", "&quot;");
-
-        cx.render(rsx! {
-            Head { assets: assets }
-            body {
-                div { id: "main", dangerous_inner_html: "{app}" }
-                input { r#type: "hidden", id: "props", value: "{server_props}" }
-                script { r#type: "module", dangerous_inner_html: "{js}" }
-            }
-        })
     }
 
     impl From<sqlx::Error> for AppError {
@@ -321,89 +262,6 @@ mod backend {
         fn into_response(self) -> Response {
             self.maybe_response()
                 .unwrap_or(AppError::NotFound.into_response())
-        }
-    }
-
-    #[derive(Clone, Default, PartialEq)]
-    pub struct AssetMap {
-        pub tailwind: String,
-        pub manifest: String,
-        pub favicon_ico: String,
-        pub favicon_svg: String,
-        pub apple_touch_icon: String,
-        pub dioxus: String,
-        pub dioxus_bg: String,
-    }
-
-    #[derive(Clone)]
-    pub struct BackendState {
-        pub assets: AssetMap,
-        pub db: Database,
-    }
-
-    impl BackendState {
-        pub async fn new() -> Self {
-            let mut assets = AssetMap::default();
-            for asset in Assets::iter() {
-                let path = asset.as_ref();
-                if let Some(file) = Assets::get(path) {
-                    match path.split("/").last().unwrap_or_default() {
-                        "tailwind.css" => {
-                            assets.tailwind = format!(
-                                "{}?v={}",
-                                path,
-                                file.metadata.last_modified().unwrap_or_default()
-                            )
-                        }
-                        "site.webmanifest" => {
-                            assets.manifest = format!(
-                                "{}?v={}",
-                                path,
-                                file.metadata.last_modified().unwrap_or_default()
-                            )
-                        }
-                        "favicon.ico" => {
-                            assets.favicon_ico = format!(
-                                "{}?v={}",
-                                path,
-                                file.metadata.last_modified().unwrap_or_default()
-                            )
-                        }
-                        "safari-pinned-tab.svg" => {
-                            assets.favicon_svg = format!(
-                                "{}?v={}",
-                                path,
-                                file.metadata.last_modified().unwrap_or_default()
-                            )
-                        }
-                        "apple-touch-icon.png" => {
-                            assets.apple_touch_icon = format!(
-                                "{}?v={}",
-                                path,
-                                file.metadata.last_modified().unwrap_or_default()
-                            )
-                        }
-                        "dioxus.js" => {
-                            assets.dioxus = format!(
-                                "{}?v={}",
-                                path,
-                                file.metadata.last_modified().unwrap_or_default()
-                            )
-                        }
-                        "dioxus_bg.wasm" => {
-                            assets.dioxus_bg = format!(
-                                "{}?v={}",
-                                path,
-                                file.metadata.last_modified().unwrap_or_default()
-                            )
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            let env = Env::new();
-            let db = Database::new(env.database_url.clone()).await;
-            Self { assets, db }
         }
     }
 
@@ -678,32 +536,29 @@ pub enum AppError {
 
 #[derive(Serialize, Default, Deserialize, Copy, Clone, Debug)]
 pub struct SignupName {
-    pub is_empty: SignupNameState,
     pub is_alphanumeric: SignupNameState,
     pub less_than_max_len: SignupNameState,
     pub greater_than_min_len: SignupNameState,
-    pub starts_with_letter: SignupNameState,
     pub is_available: SignupNameState,
 }
 
 pub fn validate_name(name: &String) -> SignupName {
-    let is_empty = name.is_empty().into();
     let is_alphanumeric = name.chars().all(|c| c.is_ascii_alphanumeric()).into();
     let greater_than_min_len = (name.len() >= 3).into();
     let less_than_max_len = (name.len() <= 20).into();
-    let starts_with_letter = name
-        .chars()
-        .nth(0)
-        .unwrap_or_default()
-        .is_ascii_alphabetic()
-        .into();
     SignupName {
-        is_empty,
         is_alphanumeric,
         less_than_max_len,
         greater_than_min_len,
-        starts_with_letter,
         ..Default::default()
+    }
+}
+
+impl SignupName {
+    fn is_valid(&self) -> bool {
+        self.is_alphanumeric == SignupNameState::Valid
+            && self.less_than_max_len == SignupNameState::Valid
+            && self.greater_than_min_len == SignupNameState::Valid
     }
 }
 
@@ -711,7 +566,7 @@ impl From<bool> for SignupNameState {
     fn from(value: bool) -> Self {
         match value {
             true => SignupNameState::Valid,
-            false => SignupNameState::Initial,
+            false => SignupNameState::Invalid,
         }
     }
 }
@@ -723,6 +578,9 @@ async fn signup(
 ) -> Result<Result<Account, SignupName>, ServerFnError> {
     let db = use_db(&sx);
     let mut signup_name = validate_name(&name);
+    if !signup_name.is_valid() {
+        return Ok(Err(signup_name));
+    }
     let account = match db.insert_account(name).await {
         Ok(a) => a,
         Err(err) => match err {
@@ -1046,10 +904,13 @@ fn Signup(cx: Scope) -> Element {
                         account_state.set(Some(account));
                         view_state.set(View::ShowAccount);
                     }
-                    Ok(Err(sn)) => signup_state.with_mut(|st| {
-                        st.loading = false;
-                        st.signup_name = sn;
-                    }),
+                    Ok(Err(sn)) => {
+                        log::info!("{:?}", sn);
+                        signup_state.with_mut(|st| {
+                            st.loading = false;
+                            st.signup_name = sn;
+                        });
+                    }
                     Err(err) => log::info!("{err}"),
                 }
             }
@@ -1059,7 +920,6 @@ fn Signup(cx: Scope) -> Element {
         is_alphanumeric,
         less_than_max_len,
         greater_than_min_len,
-        starts_with_letter,
         is_available,
         ..
     } = signup_state.signup_name;
@@ -1073,7 +933,6 @@ fn Signup(cx: Scope) -> Element {
                     Badge { color: "{greater_than_min_len}", text: "Min 3 chars" }
                     Badge { color: "{less_than_max_len}", text: "Max 20 chars" }
                     Badge { color: "{is_alphanumeric}", text: "Letters and numbers" }
-                    Badge { color: "{starts_with_letter}", text: "Starts with letter" }
                     if signup_state.loading {
                         rsx! {
                             Badge { color: "gray", text: "..." }
