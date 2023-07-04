@@ -955,27 +955,16 @@ fn Posts(cx: Scope) -> Element {
     let posts = posts.into_iter().enumerate().map(|(i, p)| {
         let last = num_posts == i + 1;
         rsx! {
-            StackableCard {
-                offset: i + 1,
-                last: last,
-                Card {
-                    ShowPost { key: "{p.id}" post: p }
-                }
+            StackableCard { offset: i + 1, last: last,
+                Card { ShowPost { key: "{p.id}", post: p } }
             }
         }
     });
     cx.render(rsx! {
         div { class: "max-w-md mx-auto",
-            div {
-                class: "pt-4",
-                posts
-            }
+            posts,
             Fab { onclick: show_sheet, "+" }
-            Sheet {
-                shown: *sheet_shown,
-                onclose: move |_| set_sheet_shown(false),
-                NewPost {}
-            }
+            Sheet { shown: *sheet_shown, onclose: move |_| set_sheet_shown(false), NewPost {} }
         }
     })
 }
@@ -1394,20 +1383,13 @@ fn Fab<'a>(cx: Scope<'a, ButtonProps<'a>>) -> Element {
 fn StackableCard<'a>(cx: Scope, offset: usize, last: bool, children: Element<'a>) -> Element {
     let rem = if last == &true { *offset } else { offset + 6 };
     cx.render(rsx! {
-        div {
-            class: "sticky",
-            style: "height: calc(100vh - {rem}rem); top: {offset}rem",
-            children
-        }
+        div { class: "sticky", style: "height: calc(100vh - {rem}rem); top: {offset}rem", children }
     })
 }
 
 #[inline_props]
 fn Card<'a>(cx: Scope, children: Element<'a>) -> Element {
     cx.render(rsx! {
-        div {
-            class: "h-full rounded-xl dark:bg-gray-800 p-3 border-gray-950 border",
-            children
-        }
+        div { class: "h-full rounded-xl dark:bg-gray-800 p-3 border-gray-950 border", children }
     })
 }
