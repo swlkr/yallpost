@@ -183,7 +183,8 @@ mod backend {
         let mut vdom = VirtualDom::new_with_props(Router, server_props.clone());
         let _ = vdom.rebuild();
         let app = dioxus_ssr::pre_render(&vdom);
-        let index_html = std::fs::read_to_string("./dist/index.html").unwrap();
+        let index_html = Assets::get("index.html").unwrap();
+        let index_html = std::str::from_utf8(index_html.data.as_ref()).unwrap();
         let index_html = index_html.replace("<!-- app -->", &app);
         let index_html = index_html.replace(
             "<!-- props -->",
@@ -1261,6 +1262,6 @@ fn StackableCard<'a>(cx: Scope, offset: usize, last: bool, children: Element<'a>
 #[inline_props]
 fn Card<'a>(cx: Scope, children: Element<'a>) -> Element {
     cx.render(rsx! {
-        div { class: "h-full rounded-xl dark:bg-gray-800 p-3 border-gray-950 border", children }
+        div { class: "h-full rounded-xl bg-white dark:bg-gray-800 p-3 border-gray-950 border", children }
     })
 }
