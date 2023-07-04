@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+use std::fmt::Display;
+
 /*
 
     TODO: posts
@@ -9,7 +11,7 @@
 */
 use dioxus::prelude::*;
 use dioxus_fullstack::prelude::*;
-use fermi::{use_atom_state, use_init_atom_root, use_read, Atom};
+use fermi::prelude::*;
 use models::{Account, Post, Session};
 use serde::{Deserialize, Serialize};
 use thiserror;
@@ -27,7 +29,7 @@ mod frontend {
     pub fn main() {
         dioxus_web::launch_with_props(
             Router,
-            RouterProps::default(),
+            ServerProps::default(),
             dioxus_web::Config::default().hydrate(true),
         );
         #[cfg(debug_assertions)]
@@ -150,7 +152,7 @@ mod backend {
         let posts = db.posts().await.unwrap_or_default();
         let mut vdom = VirtualDom::new_with_props(
             Router,
-            RouterProps {
+            ServerProps {
                 account: current_account.clone(),
                 posts: posts.clone(),
                 ..Default::default()
@@ -170,22 +172,6 @@ mod backend {
             })
         ))
     }
-
-    // async fn delete_account(
-    //     TypedHeader(cookie): TypedHeader<Cookie>,
-    //     State(BackendState { db, .. }): State<BackendState>,
-    //     Json(_): Json<EmptyJson>,
-    // ) -> Result<impl IntoResponse, AppError> {
-    //     let identifier = cookie.get("id").ok_or(AppError::NotFound)?;
-    //     let session = db.delete_session_by_identifier(identifier).await?;
-    //     let _ = db.delete_account_by_id(session.account_id).await?;
-    //     let mut headers = HeaderMap::new();
-    //     headers.insert(
-    //         http::header::SET_COOKIE,
-    //         HeaderValue::from_str(set_cookie(Session::default()).as_str()).unwrap(),
-    //     );
-    //     Ok((headers, Json(EmptyJson::default())))
-    // }
 
     async fn serve_assets(uri: Uri) -> impl IntoResponse {
         let mut path = uri.path().trim_start_matches('/').to_string();
@@ -210,30 +196,6 @@ mod backend {
             "id", session.identifier, secure
         )
     }
-
-    // async fn on_backend_fn(
-    //     State(BackendState { db, .. }): State<BackendState>,
-    //     TypedHeader(cookie): TypedHeader<Cookie>,
-    //     Json(backend_fn): Json<BackendFn>,
-    // ) -> impl IntoResponse {
-    //     let session = match cookie.get("id") {
-    //         Some(identifier) => db.session_by_identifer(identifier).await.ok(),
-    //         None => None,
-    //     };
-    //     let account = if let Some(Session { account_id, .. }) = session {
-    //         db.account_by_id(account_id).await.ok()
-    //     } else {
-    //         None
-    //     };
-    //     let sx = ServerCx {
-    //         account,
-    //         db: Some(db),
-    //     };
-    //     match backend_fn.backend(sx).await {
-    //         Ok(body) => (StatusCode::OK, body).into_response(),
-    //         Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
-    //     }
-    // }
 
     #[inline_props]
     fn Head<'a>(cx: Scope, assets: &'a AssetMap) -> Element {
@@ -285,7 +247,7 @@ mod backend {
                }});"#,
             assets.dioxus, assets.dioxus_bg
         );
-        let initial_props = &serde_json::to_string(&RouterProps {
+        let server_props = &serde_json::to_string(&ServerProps {
             account: account.clone().unwrap_or_default(),
             posts: posts.clone(),
             ..Default::default()
@@ -297,7 +259,7 @@ mod backend {
             Head { assets: assets }
             body {
                 div { id: "main", dangerous_inner_html: "{app}" }
-                input { r#type: "hidden", id: "initial-props", value: "{initial_props}" }
+                input { r#type: "hidden", id: "props", value: "{server_props}" }
                 script { r#type: "module", dangerous_inner_html: "{js}" }
             }
         })
@@ -871,34 +833,21 @@ enum View {
     ShowAccount,
 }
 
-#[inline_props]
-fn Nav<'a>(
-    cx: Scope,
-    onclick: EventHandler<'a, View>,
-    account: Option<&'a Option<Account>>,
-) -> Element {
-    let st = use_read(cx, APP_STATE);
-    let is_logged_in = match account {
-        Some(Some(_)) => true,
-        Some(None) => false,
-        None => false,
-    };
-    let is_logged_in = match st.ready {
-        true => st.account.is_some(),
-        false => is_logged_in,
-    };
-    let links = if is_logged_in {
-        rsx! {a { class: "cursor-pointer", onclick: move |_| onclick.call(View::ShowAccount), "Account" }}
+fn Nav(cx: Scope) -> Element {
+    let account = use_app_state(cx, ACCOUNT);
+    let set_view = use_set(cx, VIEW);
+    let links = if account.is_some() {
+        rsx! {a { class: "cursor-pointer", onclick: move |_| set_view(View::ShowAccount), "Account" }}
     } else {
         rsx! {
-            a { class: "cursor-pointer", onclick: move |_| onclick.call(View::Login), "Login" }
-            a { class: "cursor-pointer", onclick: move |_| onclick.call(View::Signup), "Signup" }
+            a { class: "cursor-pointer", onclick: move |_| set_view(View::Login), "Login" }
+            a { class: "cursor-pointer", onclick: move |_| set_view(View::Signup), "Signup" }
         }
     };
     cx.render(rsx! {
         div { class: "dark:bg-gray-900 p-4 bg-gray-200 fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-6 standalone:pb-8 z-30",
             div { class: "flex lg:justify-center lg:gap-4 justify-around",
-                a { class: "cursor-pointer", onclick: move |_| onclick.call(View::Posts), "Home" }
+                a { class: "cursor-pointer", onclick: move |_| set_view(View::Posts), "Home" }
                 links
             }
         }
@@ -906,7 +855,7 @@ fn Nav<'a>(
 }
 
 #[derive(Props, Clone, Default, PartialEq, Serialize, Deserialize)]
-struct RouterProps {
+struct ServerProps {
     #[props(!optional)]
     account: Option<Account>,
     posts: Vec<Post>,
@@ -914,12 +863,12 @@ struct RouterProps {
 }
 
 #[allow(unreachable_code)]
-fn initial_props() -> Option<RouterProps> {
+fn initial_props() -> Option<ServerProps> {
     #[cfg(frontend)]
     {
         let initial_props_string = web_sys::window()?
             .document()?
-            .get_element_by_id("initial-props")?
+            .get_element_by_id("props")?
             .get_attribute("value")?;
         return serde_json::from_str(&initial_props_string).ok();
     }
@@ -930,114 +879,102 @@ fn initial_props() -> Option<RouterProps> {
     }
 }
 
-static APP_STATE: Atom<AppState> = |_| AppState::default();
+static READY: Atom<bool> = |_| false;
+static ACCOUNT: Atom<Option<Account>> = |_| None;
+static VIEW: Atom<View> = |_| Default::default();
+static POSTS: Atom<Vec<Post>> = |_| Default::default();
+static SHEET_SHOWN: Atom<bool> = |_| false;
 
-fn Router(cx: Scope<RouterProps>) -> Element {
+fn Router(cx: Scope<ServerProps>) -> Element {
     use_init_atom_root(cx);
-    let app_state = use_atom_state(cx, APP_STATE);
     let props = match initial_props() {
         Some(p) => p,
         None => cx.props.clone(),
     };
+    use_shared_state_provider(cx, || props.view.clone());
+    use_shared_state_provider(cx, || props.account.clone());
+    use_shared_state_provider(cx, || props.posts.clone());
+    let account_state = use_atom_state(cx, ACCOUNT);
+    let view_state = use_atom_state(cx, VIEW);
+    let posts_state = use_atom_state(cx, POSTS);
+    let ready_state = use_atom_state(cx, READY);
     let future = use_future(cx, (), |_| {
-        to_owned![app_state, props];
+        to_owned![account_state, view_state, posts_state, ready_state];
         async move {
-            app_state.with_mut(|s| {
-                s.account = props.account.clone();
-                s.posts = props.posts.clone();
-                s.ready = true;
-            })
+            account_state.set(props.account);
+            posts_state.set(props.posts);
+            view_state.set(props.view);
+            ready_state.set(true);
         }
     });
     cx.render(rsx! {
         match future.value() {
-            Some(_) => rsx! { Root { account: app_state.account.clone(), posts: app_state.posts.clone(), view: app_state.view.clone() } },
-            None => rsx! { Root { account: props.account, posts: props.posts, view: props.view } },
+            _ => rsx! { Root {} }
         }
     })
 }
 
-fn Root<'a>(cx: Scope<'a, RouterProps>) -> Element {
-    let app_state = use_atom_state(cx, APP_STATE);
-    let RouterProps {
-        account,
-        posts,
-        view,
-    } = cx.props;
+fn use_app_state<T: Clone + 'static>(cx: Scope, atom: Atom<T>) -> T {
+    let ready = use_read(cx, READY);
+    let state = use_read(cx, atom);
+    let props = use_shared_state::<T>(cx).unwrap().read();
+    let result = match ready {
+        true => state,
+        false => &props,
+    };
+    result.clone()
+}
+
+fn Root(cx: Scope) -> Element {
+    let view = use_app_state(cx, VIEW);
     let component = match view {
-        View::Posts => {
-            rsx! { Posts { posts: posts, account: account } }
-        }
+        View::Posts => rsx! { Posts {} },
         View::Login => rsx! { Login {} },
         View::Signup => rsx! { Signup {} },
         View::ShowAccount => rsx! { ShowAccount {} },
     };
     cx.render(rsx! {
-        div { class: "dark:bg-gray-950 dark:text-white text-gray-950",
-            Nav { onclick: move |r: View| app_state.with_mut(|s| s.view = r), account: account }
-            div { class: "md:pt-24", component }
+        div { class: "dark:bg-gray-950 dark:text-white text-gray-950 min-h-screen",
+            Nav {}
+            div { class: "md:pt-24 px-4 md:px-0", component }
         }
     })
 }
 
-#[inline_props]
-fn Posts<'a>(cx: Scope, account: Option<&'a Option<Account>>, posts: &'a Vec<Post>) -> Element {
-    let st = use_atom_state(cx, APP_STATE);
+fn Posts(cx: Scope) -> Element {
+    let sheet_shown = use_atom_state(cx, SHEET_SHOWN);
     let show_sheet = move |_| {
-        st.with_mut(|st| st.sheet_shown = !st.sheet_shown);
+        sheet_shown.set(!sheet_shown);
     };
-    let (account, posts) = match st.ready {
-        true => (&st.account, &st.posts),
-        false => (
-            match account {
-                Some(a) => a,
-                None => &None,
-            },
-            *posts,
-        ),
-    };
-    let cards = posts
-        .iter()
-        .enumerate()
-        .map(|(i, p)| (i + 1, p))
-        .collect::<Vec<(usize, &Post)>>();
+    let posts = use_app_state(cx, POSTS);
+    let posts = posts.into_iter().enumerate().map(|(i, p)| {
+        rsx! {
+            StackableCard {
+                offset: i + 1,
+                Card {
+                    ShowPost { key: "{p.id}" post: p }
+                }
+            }
+        }
+    });
     cx.render(rsx! {
         div { class: "max-w-md mx-auto",
-            if posts.is_empty() {
-                rsx! {
-                    div { "It's quiet in here... Too quiet" }
-                }
-            } else {
-                rsx! {
-                    div {
-                        class: "pt-4 px-4",
-                        for card in cards {
-                            StackableCard {
-                                offset: card.0,
-                                Card {
-                                    ShowPost { key: "{card.1.id}", post: card.1 }
-                                }
-                            }
-                        }
-                    }
-                }
+            div {
+                class: "pt-4",
+                posts
             }
-            if account.is_some() {
-                rsx! {
-                    Fab { onclick: show_sheet, "+" }
-                    Sheet {
-                        shown: st.sheet_shown,
-                        onclose: move |_| st.with_mut(|st| st.sheet_shown = false),
-                        NewPost {}
-                    }
-                }
+            Fab { onclick: show_sheet, "+" }
+            Sheet {
+                shown: **sheet_shown,
+                onclose: move |_| sheet_shown.set(false),
+                NewPost {}
             }
         }
     })
 }
 
 #[inline_props]
-fn ShowPost<'a>(cx: Scope, post: &'a Post) -> Element {
+fn ShowPost(cx: Scope, post: Post) -> Element {
     cx.render(rsx! {
         div { class: "h-full flex items-center justify-center flex-col",
             h1 { class: "text-4xl font-bold", "{post.title}" }
@@ -1047,18 +984,19 @@ fn ShowPost<'a>(cx: Scope, post: &'a Post) -> Element {
 }
 
 fn NewPost(cx: Scope) -> Element {
-    let st = use_atom_state(cx, APP_STATE);
+    let posts_state = use_atom_state(cx, POSTS);
+    let sheet_shown = use_atom_state(cx, SHEET_SHOWN);
     let title = use_state(cx, || "".to_string());
     let body = use_state(cx, || "".to_string());
     let on_add = move |_| {
-        to_owned![title, body, st];
+        to_owned![title, body, posts_state, sheet_shown];
         let sc = cx.sc();
         cx.spawn(async move {
             match add_post(sc, title.get().clone(), body.get().clone()).await {
-                Ok(Some(new_post)) => st.with_mut(|st| {
-                    st.posts.insert(0, new_post);
-                    st.sheet_shown = false;
-                }),
+                Ok(Some(new_post)) => {
+                    posts_state.with_mut(|p| p.insert(0, new_post));
+                    sheet_shown.set(false);
+                }
                 Ok(None) => todo!(),
                 Err(_) => todo!(),
             }
@@ -1082,15 +1020,6 @@ fn NewPost(cx: Scope) -> Element {
     })
 }
 
-#[derive(Clone, Default)]
-struct AppState {
-    view: View,
-    account: Option<Account>,
-    ready: bool,
-    posts: Vec<Post>,
-    sheet_shown: bool,
-}
-
 #[derive(Default, Clone)]
 struct SignupState {
     name: String,
@@ -1099,28 +1028,29 @@ struct SignupState {
 }
 
 fn Signup(cx: Scope) -> Element {
-    let app_state = use_atom_state(cx, APP_STATE);
-    let state = use_state(cx, || SignupState::default());
+    let view_state = use_atom_state(cx, VIEW);
+    let account_state = use_atom_state(cx, ACCOUNT);
+    let signup_state = use_state(cx, || SignupState::default());
     let oninput = move |e: FormEvent| {
-        to_owned![state];
-        state.with_mut(|st| {
+        to_owned![signup_state];
+        signup_state.with_mut(|st| {
             st.name = e.value.clone();
             st.signup_name = validate_name(&e.value);
         });
     };
     let onclick = move |_| {
         let sc = cx.sc();
-        to_owned![state, app_state];
+        to_owned![signup_state, account_state, view_state];
         cx.spawn({
             async move {
-                state.with_mut(|st| st.loading = true);
-                let result = signup(sc, state.name.clone()).await;
+                signup_state.with_mut(|state| state.loading = true);
+                let result = signup(sc, signup_state.name.clone()).await;
                 match result {
-                    Ok(Ok(account)) => app_state.with_mut(|st| {
-                        st.account = Some(account);
-                        st.view = View::ShowAccount;
-                    }),
-                    Ok(Err(sn)) => state.with_mut(|st| {
+                    Ok(Ok(account)) => {
+                        account_state.set(Some(account));
+                        view_state.set(View::ShowAccount);
+                    }
+                    Ok(Err(sn)) => signup_state.with_mut(|st| {
                         st.loading = false;
                         st.signup_name = sn;
                     }),
@@ -1136,7 +1066,7 @@ fn Signup(cx: Scope) -> Element {
         starts_with_letter,
         is_available,
         ..
-    } = state.signup_name;
+    } = signup_state.signup_name;
     cx.render(rsx! {
         div { class: "max-w-md mx-auto flex flex-col gap-4 pt-16",
             h1 { class: "text-2xl text-gray-950 dark:text-white text-center", "Signup" }
@@ -1144,17 +1074,17 @@ fn Signup(cx: Scope) -> Element {
                 TextInput { name: "username", oninput: oninput, placeholder: "Your name" }
                 Button { onclick: onclick, "Claim your name" }
                 div { class: "flex flex-wrap gap-2",
-                    Badge { state: greater_than_min_len, text: "Min 3 chars" }
-                    Badge { state: less_than_max_len, text: "Max 20 chars" }
-                    Badge { state: is_alphanumeric, text: "Letters and numbers" }
-                    Badge { state: starts_with_letter, text: "Starts with letter" }
-                    if state.loading {
+                    Badge { color: "{greater_than_min_len}", text: "Min 3 chars" }
+                    Badge { color: "{less_than_max_len}", text: "Max 20 chars" }
+                    Badge { color: "{is_alphanumeric}", text: "Letters and numbers" }
+                    Badge { color: "{starts_with_letter}", text: "Starts with letter" }
+                    if signup_state.loading {
                         rsx! {
-                            Badge { state: SignupNameState::Initial, text: "..." }
+                            Badge { color: "gray", text: "..." }
                         }
                     } else {
                         rsx! {
-                            Badge { state: is_available, text: "Available" }
+                            Badge { color: "{is_available}", text: "Available" }
                         }
                     }
                 }
@@ -1171,12 +1101,23 @@ pub enum SignupNameState {
     Initial,
 }
 
+impl Display for SignupNameState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let result = match self {
+            SignupNameState::Valid => "green",
+            SignupNameState::Invalid => "red",
+            SignupNameState::Initial => "gray",
+        };
+        f.write_str(result)
+    }
+}
+
 #[inline_props]
-fn Badge<'a>(cx: Scope, state: SignupNameState, text: &'a str) -> Element {
-    let color_class = match state {
-        SignupNameState::Valid => "dark:bg-green-500/10 dark:text-green-400 dark:ring-green-500/20 bg-green-50 text-green-600 ring-green-500/10",
-        SignupNameState::Initial => "dark:bg-gray-400/10 dark:text-gray-400 dark:ring-gray-400/20 bg-gray-50 text-gray-600 ring-gray-500/10",
-        SignupNameState::Invalid => "dark:bg-red-500/10 dark:text-red-400 dark:ring-red-500/20 bg-red-50 text-red-600 ring-red-500/10",
+fn Badge<'a>(cx: Scope, color: &'a str, text: &'a str) -> Element {
+    let color_class = match *color {
+        "green" => "dark:bg-green-500/10 dark:text-green-400 dark:ring-green-500/20 bg-green-50 text-green-600 ring-green-500/10",
+        "red" => "dark:bg-red-500/10 dark:text-red-400 dark:ring-red-500/20 bg-red-50 text-red-600 ring-red-500/10",
+        _ => "dark:bg-gray-400/10 dark:text-gray-400 dark:ring-gray-400/20 bg-gray-50 text-gray-600 ring-gray-500/10",
     };
     cx.render(rsx! {
         span { class: "inline-flex items-center rounded-md px-2 py-1 font-medium ring-1 ring-inset {color_class}",
@@ -1187,20 +1128,21 @@ fn Badge<'a>(cx: Scope, state: SignupNameState, text: &'a str) -> Element {
 
 fn Login(cx: Scope) -> Element {
     let login_code = use_state(cx, || String::default());
-    let st = use_atom_state(cx, APP_STATE);
     let error_state = use_state(cx, || "");
+    let view_state = use_atom_state(cx, VIEW);
+    let account_state = use_atom_state(cx, ACCOUNT);
     let onclick = move |_| {
         let login_code = login_code.get().clone();
         let sx = cx.sc();
-        to_owned![st, error_state];
+        to_owned![view_state, account_state, error_state];
         cx.spawn({
             async move {
                 if let Ok(account) = login(sx, login_code).await {
                     match account {
-                        Some(a) => st.with_mut(|st| {
-                            st.account = Some(a);
-                            st.view = View::ShowAccount;
-                        }),
+                        Some(a) => {
+                            account_state.set(Some(a));
+                            view_state.set(View::ShowAccount);
+                        }
                         None => error_state.set("No username found. Wanna take it?"),
                     }
                 }
@@ -1223,28 +1165,22 @@ fn Login(cx: Scope) -> Element {
     })
 }
 
-fn use_account(cx: &ScopeState) -> Option<Account> {
-    let app_state = use_read(cx, APP_STATE);
-    app_state.account.clone()
-}
-
 fn ShowAccount(cx: Scope) -> Element {
-    let st = use_atom_state(cx, APP_STATE);
-    let account = use_account(cx);
+    let account = use_app_state(cx, ACCOUNT);
+    let account_state = use_atom_state(cx, ACCOUNT);
+    let view_state = use_atom_state(cx, VIEW);
     let login_code = match account {
         Some(a) => a.login_code.to_string(),
         None => String::default(),
     };
     let on_logout = move |_| {
         let sc = cx.sc();
-        to_owned![st];
         cx.spawn({
+            to_owned![account_state, view_state];
             async move {
                 if let Ok(_) = logout(sc).await {
-                    st.with_mut(|st| {
-                        st.account = None;
-                        st.view = View::Posts;
-                    })
+                    account_state.set(None);
+                    view_state.set(View::Posts);
                 }
             }
         })
@@ -1260,13 +1196,13 @@ fn ShowAccount(cx: Scope) -> Element {
     };
     let on_delete_account = move |_| {
         let sc = cx.sc();
-        to_owned![st];
-        cx.spawn(async move {
-            if let Ok(_) = delete_account(sc).await {
-                st.with_mut(|st| {
-                    st.account = None;
-                    st.view = View::Posts;
-                })
+        cx.spawn({
+            to_owned![account_state, view_state];
+            async move {
+                if let Ok(_) = delete_account(sc).await {
+                    account_state.set(None);
+                    view_state.set(View::Posts);
+                }
             }
         })
     };
