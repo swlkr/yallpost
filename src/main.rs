@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
-use std::fmt::Display;
+use std::{fmt::Display, rc::Rc};
 
 /*
 
@@ -941,16 +941,23 @@ fn Root(cx: Scope) -> Element {
     })
 }
 
+fn use_rw_state<T: 'static>(cx: Scope, atom: Atom<T>) -> (&Rc<dyn Fn(T)>, &T) {
+    (use_set(cx, atom), use_read(cx, atom))
+}
+
 fn Posts(cx: Scope) -> Element {
-    let sheet_shown = use_atom_state(cx, SHEET_SHOWN);
+    let (set_sheet_shown, sheet_shown) = use_rw_state(cx, SHEET_SHOWN);
     let show_sheet = move |_| {
-        sheet_shown.set(!sheet_shown);
+        set_sheet_shown(!sheet_shown);
     };
     let posts = use_app_state(cx, POSTS);
+    let num_posts = posts.len();
     let posts = posts.into_iter().enumerate().map(|(i, p)| {
+        let last = num_posts == i + 1;
         rsx! {
             StackableCard {
                 offset: i + 1,
+                last: last,
                 Card {
                     ShowPost { key: "{p.id}" post: p }
                 }
@@ -965,8 +972,8 @@ fn Posts(cx: Scope) -> Element {
             }
             Fab { onclick: show_sheet, "+" }
             Sheet {
-                shown: **sheet_shown,
-                onclose: move |_| sheet_shown.set(false),
+                shown: *sheet_shown,
+                onclose: move |_| set_sheet_shown(false),
                 NewPost {}
             }
         }
@@ -1384,11 +1391,12 @@ fn Fab<'a>(cx: Scope<'a, ButtonProps<'a>>) -> Element {
 }
 
 #[inline_props]
-fn StackableCard<'a>(cx: Scope, offset: usize, children: Element<'a>) -> Element {
+fn StackableCard<'a>(cx: Scope, offset: usize, last: bool, children: Element<'a>) -> Element {
+    let rem = if last == &true { *offset } else { offset + 6 };
     cx.render(rsx! {
         div {
             class: "sticky",
-            style: "height: calc(100vh - {offset}rem); top: {offset}rem",
+            style: "height: calc(100vh - {rem}rem); top: {offset}rem",
             children
         }
     })
