@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "insert into posts (title, body, account_id, created_at, updated_at) values (?, ?, ?, ?, ?) returning *",
+  "query": "select posts.*, accounts.name as account_name from posts join accounts on accounts.id = posts.account_id where posts.id = ?",
   "describe": {
     "columns": [
       {
@@ -9,33 +9,33 @@
         "type_info": "Int64"
       },
       {
-        "name": "title",
+        "name": "body",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "body",
-        "ordinal": 2,
-        "type_info": "Text"
-      },
-      {
         "name": "account_id",
-        "ordinal": 3,
+        "ordinal": 2,
         "type_info": "Int64"
       },
       {
         "name": "updated_at",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Int64"
       },
       {
         "name": "created_at",
-        "ordinal": 5,
+        "ordinal": 4,
         "type_info": "Int64"
+      },
+      {
+        "name": "account_name",
+        "ordinal": 5,
+        "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 5
+      "Right": 1
     },
     "nullable": [
       false,
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "5a7c709d4025ef4084454fc0e38f96247b93a379de85cc9680f4e6de741ec707"
+  "hash": "9237ffab8604e53bb7be7f209613e11e380bad9e1e83232ec30470ec19201418"
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "select * from posts order by created_at desc limit 30",
+  "query": "select posts.*, accounts.name as account_name from posts join accounts on accounts.id = posts.account_id order by posts.created_at desc limit 30",
   "describe": {
     "columns": [
       {
@@ -9,29 +9,29 @@
         "type_info": "Int64"
       },
       {
-        "name": "title",
+        "name": "body",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "body",
-        "ordinal": 2,
-        "type_info": "Text"
-      },
-      {
         "name": "account_id",
-        "ordinal": 3,
+        "ordinal": 2,
         "type_info": "Int64"
       },
       {
         "name": "updated_at",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Int64"
       },
       {
         "name": "created_at",
-        "ordinal": 5,
+        "ordinal": 4,
         "type_info": "Int64"
+      },
+      {
+        "name": "account_name",
+        "ordinal": 5,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "14b57637578f52b4c6883d45bca71eda73b184a33d02ea1e3a92148f42a07a96"
+  "hash": "c09f10e8894065f0aa1d4bd0b10574451af87ff0dee5f8ab1394b90e1e96a17a"
 }

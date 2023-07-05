@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "insert into posts (body, account_id, created_at, updated_at) values (?, ?, ?, ?) returning id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bebabf21fb5912bc0551068cf3c253fb53b3e8faf17969e725f9c8b929b39b2d"
+}

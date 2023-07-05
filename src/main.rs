@@ -1,9 +1,10 @@
 #![allow(non_snake_case)]
 
 /*
-
+    TODO: profile photos
     TODO: posts
-    TODO: upvotes
+    TODO: likes
+    TODO: comments
     TODO: timeline posts
     TODO: recommended posts
     TODO: meta tags
@@ -40,7 +41,7 @@ mod frontend {
 #[cfg(backend)]
 mod backend {
     use super::*;
-    use crate::models::Post;
+    use crate::models::{Post, InsertPost};
     use axum::{
         body::{Body, Full},
         extract::State,
@@ -417,17 +418,11 @@ mod backend {
             Ok(account)
         }
 
-        pub async fn insert_post(
-            &self,
-            title: String,
-            body: String,
-            account_id: i64,
-        ) -> Result<Post, AppError> {
+        pub async fn insert_post(&self, body: String, account_id: i64) -> Result<Post, AppError> {
             let now = Self::now();
-            let post = sqlx::query_as!(
-                Post,
-                "insert into posts (title, body, account_id, created_at, updated_at) values (?, ?, ?, ?, ?) returning *",
-                title,
+            let InsertPost { id } = sqlx::query_as!(
+                InsertPost,
+                "insert into posts (body, account_id, created_at, updated_at) values (?, ?, ?, ?) returning id",
                 body,
                 account_id,
                 now,
@@ -435,13 +430,19 @@ mod backend {
             )
             .fetch_one(&self.connection)
             .await?;
+            let post = self.post_by_id(id).await?;
+            Ok(post)
+        }
+
+        async fn post_by_id(&self, id: i64) -> Result<Post, AppError> {
+            let post = sqlx::query_as!(Post, "select posts.*, accounts.name as account_name from posts join accounts on accounts.id = posts.account_id where posts.id = ?", id).fetch_one(&self.connection).await?;
             Ok(post)
         }
 
         async fn posts(&self) -> Result<Vec<Post>, AppError> {
             let posts = sqlx::query_as!(
                 Post,
-                "select * from posts order by created_at desc limit 30"
+                "select posts.*, accounts.name as account_name from posts join accounts on accounts.id = posts.account_id order by posts.created_at desc limit 30"
             )
             .fetch_all(&self.connection)
             .await?;
@@ -505,11 +506,22 @@ pub mod models {
     #[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
     pub struct Post {
         pub id: i64,
-        pub title: String,
         pub body: String,
         pub account_id: i64,
+        pub account_name: String,
         pub updated_at: i64,
         pub created_at: i64,
+    }
+
+    impl Post {
+        pub fn account_initial(&self) -> String {
+            self.account_name.chars().next().unwrap().to_string()
+        }
+    }
+    
+    #[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
+    pub struct InsertPost {
+        pub id: i64,
     }
 }
 
@@ -670,15 +682,11 @@ async fn delete_account(sc: DioxusServerContext) -> Result<(), ServerFnError> {
 }
 
 #[server(AddPost, "", "Cbor")]
-async fn add_post(
-    sc: DioxusServerContext,
-    title: String,
-    body: String,
-) -> Result<Option<Post>, ServerFnError> {
+async fn add_post(sc: DioxusServerContext, body: String) -> Result<Option<Post>, ServerFnError> {
     let db = use_db(&sc);
     match get_account(&sc).await {
         Some(account) => {
-            let post = db.insert_post(title, body, account.id).await?;
+            let post = db.insert_post(body, account.id).await?;
             Ok(Some(post))
         }
         _ => Ok(None),
@@ -690,26 +698,51 @@ enum View {
     #[default]
     Posts,
     Login,
+    Search,
     Signup,
     ShowAccount,
+    Messages,
+    Add,
+    Profile(Account)
 }
 
 fn Nav(cx: Scope) -> Element {
     let account = use_app_state(cx, ACCOUNT);
     let set_view = use_set(cx, VIEW);
-    let links = if account.is_some() {
-        rsx! {a { class: "cursor-pointer", onclick: move |_| set_view(View::ShowAccount), "Account" }}
-    } else {
-        rsx! {
-            a { class: "cursor-pointer", onclick: move |_| set_view(View::Login), "Login" }
-            a { class: "cursor-pointer", onclick: move |_| set_view(View::Signup), "Signup" }
-        }
-    };
+    let set_modal_view = use_set(cx, MODAL_VIEW);
+    let logged_in = account.is_some();
     cx.render(rsx! {
-        div { class: "dark:bg-gray-900 p-4 bg-gray-200 fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-6 standalone:pb-8 z-30",
+        div { class: "bg-gray-900 text-white p-4 fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-6 standalone:pb-8 z-30",
             div { class: "flex lg:justify-center lg:gap-4 justify-around",
-                a { class: "cursor-pointer", onclick: move |_| set_view(View::Posts), "Home" }
-                links
+                button { onclick: move |_| set_view(View::Posts), Icon { icon: Icons::House } }
+                button { onclick: move |_| set_view(View::Search), Icon { icon: Icons::Search } }
+                button {
+                    onclick: move |_| { 
+                        match logged_in {
+                            true => set_modal_view(Some(View::Add)),
+                            false => set_modal_view(Some(View::Signup))
+                        }
+                    },
+                    Icon { icon: Icons::PlusSquare }
+                }
+                button { 
+                    onclick: move |_| {
+                        match logged_in {
+                            true => set_view(View::Messages),
+                            false => set_modal_view(Some(View::Signup))
+                        }
+                    },
+                    Icon { icon: Icons::ChatLeftDots } 
+                }
+                button { 
+                    onclick: move |_| { 
+                        match logged_in { 
+                            true => set_view(View::ShowAccount), 
+                            false => set_modal_view(Some(View::Signup))
+                        }
+                    },
+                    Icon { icon: Icons::PersonCircle }
+                }
             }
         }
     })
@@ -743,6 +776,7 @@ fn initial_props() -> Option<ServerProps> {
 static READY: Atom<bool> = |_| false;
 static ACCOUNT: Atom<Option<Account>> = |_| None;
 static VIEW: Atom<View> = |_| Default::default();
+static MODAL_VIEW: Atom<Option<View>> = |_| None;
 static POSTS: Atom<Vec<Post>> = |_| Default::default();
 
 fn Router(cx: Scope<ServerProps>) -> Element {
@@ -785,67 +819,144 @@ fn use_app_state<T: Clone + 'static>(cx: Scope, atom: Atom<T>) -> T {
     result.clone()
 }
 
+#[inline_props]
+fn ComponentFromView(cx: Scope, view: View) -> Element {
+    cx.render(rsx! {
+        match view {
+            View::Posts => rsx! { Posts {} },
+            View::Login => rsx! { Login {} },
+            View::Signup => rsx! { Signup {} },
+            View::ShowAccount => rsx! { ShowAccount {} },
+            View::Search => rsx! { SearchComponent {} },
+            View::Messages => rsx! { MessagesComponent {} },
+            View::Add => rsx! { NewPost {} },
+            View::Profile(account) => rsx! { Profile { account: account } }
+        }
+    })
+}
+
 fn Root(cx: Scope) -> Element {
     let view = use_app_state(cx, VIEW);
-    let component = match view {
-        View::Posts => rsx! { Posts {} },
-        View::Login => rsx! { Login {} },
-        View::Signup => rsx! { Signup {} },
-        View::ShowAccount => rsx! { ShowAccount {} },
+    let modal_view = use_read(cx, MODAL_VIEW);
+    let modal_component =  match &modal_view {
+        Some(view) => {
+            rsx! { Modal { ComponentFromView { view: view.clone() } } }
+        },
+        None => rsx! { () }
+    };
+    let scroll_class = match modal_view {
+        Some(_) => "overflow-hidden",
+        None => ""
     };
     cx.render(rsx! {
-        div { class: "dark:bg-gray-950 dark:text-white text-gray-950 min-h-screen",
+        div { 
+            class: "dark:bg-gray-950 dark:text-white text-gray-950 min-h-screen {scroll_class}",
             Nav {}
-            div { class: "md:pt-24 px-4 md:px-0", component }
+            ComponentFromView { view: view }
+            modal_component
+        }
+    })
+}
+
+fn SearchComponent(cx: Scope) -> Element {
+    cx.render(rsx! {
+        div { "Search time" }
+    })
+}
+
+fn MessagesComponent(cx: Scope) -> Element {
+    cx.render(rsx! {
+        div { "Your DMs" }
+    })
+}
+
+#[inline_props]
+fn Profile<'a>(cx: Scope, account: &'a Account) -> Element {
+    cx.render(rsx! {
+        h1 {
+            class: "text-2xl text-center p-4 pt-16",
+            "{account.name}" 
         }
     })
 }
 
 fn Posts(cx: Scope) -> Element {
-    let shown = use_state(cx, || false);
-    let show_sheet = move |_| {
-        shown.set(!*shown.get());
-    };
+    let account = use_app_state(cx, ACCOUNT);
     let posts = use_app_state(cx, POSTS);
-    let num_posts = posts.len();
-    let posts = posts.into_iter().enumerate().map(|(i, p)| {
-        let last = num_posts == i + 1;
-        rsx! {
-            StackableCard { offset: i + 1, last: last,
-                Card { ShowPost { key: "{p.id}", post: p } }
-            }
-        }
+    let logged_in = account.is_some();
+    let posts = posts.into_iter().map(|p| {
+        rsx! { ShowPost { key: "{p.id}", post: p, logged_in: logged_in } }
     });
     cx.render(rsx! {
-        div { class: "max-w-md mx-auto",
-            posts,
-            Fab { onclick: show_sheet, "+" }
-            Sheet { shown: *shown.get(), onclose: move |_| shown.set(false), NewPost {} }
+        div {
+            class: "snap-mandatory snap-y overflow-y-auto h-screen max-w-md mx-auto",
+            posts
         }
     })
 }
 
 #[inline_props]
-fn ShowPost(cx: Scope, post: Post) -> Element {
+fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
+    let set_modal_view = use_set(cx, MODAL_VIEW);
+    let set_view = use_set(cx, VIEW);
+    let initial = post.account_initial();
     cx.render(rsx! {
-        div { class: "h-full flex items-center justify-center flex-col",
-            h1 { class: "text-4xl font-bold", "{post.title}" }
-            div { class: "", "{post.body}" }
+        div {
+            class: "snap-center h-full flex items-center justify-center flex-col relative",
+            div { 
+                class: "", "{post.body}"
+            }
+            div { class: "flex flex-col gap-6 items-center absolute bottom-24 right-4 z-20",
+                button { class: "opacity-80", onclick: move |_| {} }
+                button {
+                    class: "opacity-80", 
+                    onclick: move |_| {
+                        match logged_in {
+                            true => {},
+                            false => set_modal_view(Some(View::Signup))
+                        }
+                    }, 
+                    Icon { size: 32, icon: Icons::HeartFill } 
+                }
+                button { 
+                    class: "opacity-80",
+                    onclick: move |_| {
+                        match logged_in {
+                            true => {},
+                            false => set_modal_view(Some(View::Signup))
+                        }
+                    },
+                    Icon { size: 32, icon: Icons::ChatFill } 
+                }
+                button {
+                    class: "opacity-80",
+                    onclick: move |_| {
+                        to_owned![post];
+                        let account = Account { name: post.account_name, id: post.account_id, ..Default::default() };
+                        set_view(View::Profile(account))
+                    },
+                    div {
+                        class: "uppercase w-10 h-10 flex justify-center items-center text-center rounded-full dark:border-white border-gray-950 border-solid border-2",
+                        "{initial}"
+                    }
+                }
+            }
         }
     })
 }
 
 fn NewPost(cx: Scope) -> Element {
     let posts_state = use_atom_state(cx, POSTS);
-    let title = use_state(cx, || "".to_string());
+    let modal_view_state = use_atom_state(cx, MODAL_VIEW);
     let body = use_state(cx, || "".to_string());
     let on_add = move |_| {
-        to_owned![title, body, posts_state];
+        to_owned![body, posts_state, modal_view_state];
         let sc = cx.sc();
         cx.spawn(async move {
-            match add_post(sc, title.get().clone(), body.get().clone()).await {
+            match add_post(sc, body.get().clone()).await {
                 Ok(Some(new_post)) => {
                     posts_state.with_mut(|p| p.insert(0, new_post));
+                    modal_view_state.set(None);
                 }
                 Ok(None) => todo!(),
                 Err(_) => todo!(),
@@ -853,17 +964,10 @@ fn NewPost(cx: Scope) -> Element {
         });
     };
     cx.render(rsx! {
-        div { class: "flex flex-col gap-8",
+        div { class: "flex flex-col gap-8 p-4",
             h1 { class: "text-2xl", "New post" }
             div { class: "flex flex-col gap-4",
-                div { class: "flex flex-col gap-1",
-                    label { r#for: "title", "title" }
-                    TextInput { name: "title", oninput: move |e: FormEvent| title.set(e.value.clone()) }
-                }
-                div { class: "flex flex-col gap-1",
-                    label { r#for: "body", "body" }
-                    TextArea { name: "body", oninput: move |e: FormEvent| body.set(e.value.clone()) }
-                }
+                TextArea { name: "body", oninput: move |e: FormEvent| body.set(e.value.clone()) }
                 Button { onclick: on_add, "Add post" }
             }
         }
@@ -879,6 +983,7 @@ struct SignupState {
 
 fn Signup(cx: Scope) -> Element {
     let view_state = use_atom_state(cx, VIEW);
+    let modal_view_state= use_atom_state(cx, MODAL_VIEW);
     let account_state = use_atom_state(cx, ACCOUNT);
     let signup_state = use_state(cx, || SignupState::default());
     let oninput = move |e: FormEvent| {
@@ -890,7 +995,7 @@ fn Signup(cx: Scope) -> Element {
     };
     let onclick = move |_| {
         let sc = cx.sc();
-        to_owned![signup_state, account_state, view_state];
+        to_owned![signup_state, account_state, view_state, modal_view_state];
         cx.spawn({
             async move {
                 signup_state.with_mut(|state| state.loading = true);
@@ -899,9 +1004,9 @@ fn Signup(cx: Scope) -> Element {
                     Ok(Ok(account)) => {
                         account_state.set(Some(account));
                         view_state.set(View::ShowAccount);
+                        modal_view_state.set(None);
                     }
                     Ok(Err(sn)) => {
-                        log::info!("{:?}", sn);
                         signup_state.with_mut(|st| {
                             st.loading = false;
                             st.signup_name = sn;
@@ -920,8 +1025,8 @@ fn Signup(cx: Scope) -> Element {
         ..
     } = signup_state.signup_name;
     cx.render(rsx! {
-        div { class: "max-w-md mx-auto flex flex-col gap-4 pt-16",
-            h1 { class: "text-2xl text-gray-950 dark:text-white text-center", "Signup" }
+        div { class: "max-w-md mx-auto flex flex-col gap-8 p-4",
+            h1 { class: "text-2xl text-gray-950 dark:text-white", "Signup" }
             div { class: "flex flex-col gap-2",
                 TextInput { name: "username", oninput: oninput, placeholder: "Your name" }
                 Button { onclick: onclick, "Claim your name" }
@@ -939,6 +1044,11 @@ fn Signup(cx: Scope) -> Element {
                         }
                     }
                 }
+            }
+            button {
+                class: "text-center text-indigo-500",
+                onclick: move |_| modal_view_state.set(Some(View::Login)),
+                "Click here to login"
             }
         }
     })
@@ -981,11 +1091,12 @@ fn Login(cx: Scope) -> Element {
     let login_code = use_state(cx, || String::default());
     let error_state = use_state(cx, || "");
     let view_state = use_atom_state(cx, VIEW);
+    let modal_view_state= use_atom_state(cx, MODAL_VIEW);
     let account_state = use_atom_state(cx, ACCOUNT);
     let onclick = move |_| {
         let login_code = login_code.get().clone();
         let sx = cx.sc();
-        to_owned![view_state, account_state, error_state];
+        to_owned![view_state, account_state, error_state, modal_view_state];
         cx.spawn({
             async move {
                 if let Ok(account) = login(sx, login_code).await {
@@ -993,6 +1104,7 @@ fn Login(cx: Scope) -> Element {
                         Some(a) => {
                             account_state.set(Some(a));
                             view_state.set(View::ShowAccount);
+                            modal_view_state.set(None);
                         }
                         None => error_state.set("No username found. Wanna take it?"),
                     }
@@ -1001,8 +1113,8 @@ fn Login(cx: Scope) -> Element {
         })
     };
     cx.render(rsx! {
-        div { class: "max-w-md mx-auto flex flex-col gap-4 pt-16",
-            h1 { class: "text-2xl text-gray-950 dark:text-white text-center", "Login" }
+        div { class: "max-w-md mx-auto flex flex-col gap-4 p-4",
+            h1 { class: "text-2xl text-gray-950 dark:text-white", "Login" }
             div { class: "flex flex-col gap-2",
                 PasswordInput {
                     name: "username",
@@ -1011,6 +1123,11 @@ fn Login(cx: Scope) -> Element {
                 }
                 Button { onclick: onclick, "Get back in here!" }
                 div { class: "text-center", "{error_state}" }
+            }
+            button {
+                class: "text-center text-indigo-500",
+                onclick: move |_| modal_view_state.set(Some(View::Signup)),
+                "Click here to sign up"
             }
         }
     })
@@ -1180,16 +1297,18 @@ fn PasswordInput<'a>(cx: Scope<'a, InputProps<'a>>) -> Element {
 }
 
 #[inline_props]
-fn Sheet<'a>(cx: Scope, shown: bool, onclose: EventHandler<'a>, children: Element<'a>) -> Element {
-    let translate_y = match shown {
-        true => "",
-        false => "translate-y-full",
+fn Modal<'a>(cx: Scope, children: Element<'a>) -> Element {
+    let modal_view = use_atom_state(cx, MODAL_VIEW);
+    let open_class= match modal_view.get() {
+        Some(_) => "",
+        None => "hidden"
     };
     return cx.render(
         rsx! {
-            div { class: "transition ease-out overflow-y-auto {translate_y} min-h-[80%] left-0 right-0 bottom-0 lg:max-w-3xl lg:mx-auto fixed p-4 rounded-md bg-gray-50 dark:bg-gray-900 z-30",
+            div { class: "fixed inset-0 bg-white dark:bg-black transition-opacity opacity-80 z-30", onclick: move |_| modal_view.set(None) }
+            div { class: "overflow-y-auto max-w-xl {open_class} mx-auto md:top-24 top-4 absolute left-4 right-4 rounded-md bg-gray-50 dark:bg-gray-900 z-40",
                 div { class: "absolute right-4 top-4",
-                    CircleButton { onclick: move |_| onclose.call(()), div { class: "text-lg mb-1", "x" } }
+                    CircleButton { onclick: move |_| modal_view.set(None), div { class: "text-lg mb-1", "x" } }
                 }
                 children
             }
@@ -1215,31 +1334,84 @@ struct ButtonProps<'a> {
     children: Element<'a>,
 }
 
-fn Fab<'a>(cx: Scope<'a, ButtonProps<'a>>) -> Element {
-    let ButtonProps { onclick, children } = cx.props;
-    let onclick = move |e| fwd_handler(onclick, e);
+#[derive(PartialEq)]
+enum Icons {
+    HeartFill,
+    ChatFill,
+    House,
+    Search,
+    PlusSquare,
+    ChatLeftDots,
+    ChatLeftDotsFill,
+    PersonCircle
+}
+
+#[inline_props]
+fn Icon(cx: Scope, icon: Icons, size: Option<usize>) -> Element {
+    let size = size.unwrap_or(24);
+    let width = size;
+    let height = size;
     cx.render(rsx! {
-        div { class: "fixed bottom-24 right-4 z-20",
-            button {
-                class: "h-12 w-12 rounded-full bg-indigo-400 text-white box-shadow-md shadow-indigo-600 hover:box-shadow-xs hover:top-0.5 active:shadow-none active:top-1 relative",
-                onclick: onclick,
-                children
+        match icon {
+            Icons::HeartFill => rsx! {
+                    span {
+                        dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" class="bi bi-heart-fill" viewBox="0 0 16 16">
+  <path fill-rule="evenodd" d="M8 1.314C12.438-3.248 23.534 4.735 8 15-7.534 4.736 3.562-3.248 8 1.314z"/>
+</svg>"#,
+                }
+            },
+            Icons::ChatFill => rsx! {
+                span {
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" class="bi bi-chat-fill" viewBox="0 0 16 16">
+  <path d="M8 15c4.418 0 8-3.134 8-7s-3.582-7-8-7-8 3.134-8 7c0 1.76.743 3.37 1.97 4.6-.097 1.016-.417 2.13-.771 2.966-.079.186.074.394.273.362 2.256-.37 3.597-.938 4.18-1.234A9.06 9.06 0 0 0 8 15z"/>
+</svg>"#        
+                }
+            },
+            Icons::House => rsx! {
+                span {
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" class="bi bi-house" viewBox="0 0 16 16">
+  <path d="M8.707 1.5a1 1 0 0 0-1.414 0L.646 8.146a.5.5 0 0 0 .708.708L2 8.207V13.5A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V8.207l.646.647a.5.5 0 0 0 .708-.708L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293L8.707 1.5ZM13 7.207V13.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5V7.207l5-5 5 5Z"/>
+</svg>"#
+                }
+            },
+            Icons::Search => rsx! {
+                span {
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" class="bi bi-search" viewBox="0 0 16 16">
+  <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
+</svg>"#
+                }
+            },
+            Icons::PlusSquare => rsx! {
+                span {
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" class="bi bi-plus-square" viewBox="0 0 16 16">
+  <path d="M14 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h12zM2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2z"/>
+  <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
+</svg>"#
+                }
+            },
+            Icons::ChatLeftDotsFill => rsx! {
+                span {
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" class="bi bi-chat-left-dots-fill" viewBox="0 0 16 16">
+  <path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4.414a1 1 0 0 0-.707.293L.854 15.146A.5.5 0 0 1 0 14.793V2zm5 4a1 1 0 1 0-2 0 1 1 0 0 0 2 0zm4 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0zm3 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"/>
+</svg>"#
+                }
+            },
+            Icons::ChatLeftDots => rsx! {
+                span {
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" class="bi bi-chat-left-dots" viewBox="0 0 16 16">
+  <path d="M14 1a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4.414A2 2 0 0 0 3 11.586l-2 2V2a1 1 0 0 1 1-1h12zM2 0a2 2 0 0 0-2 2v12.793a.5.5 0 0 0 .854.353l2.853-2.853A1 1 0 0 1 4.414 12H14a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2z"/>
+  <path d="M5 6a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm4 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm4 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
+</svg>"#
+                }
+            },
+            Icons::PersonCircle => rsx! {
+                span {
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" class="bi bi-person-circle" viewBox="0 0 16 16">
+  <path d="M11 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/>
+  <path fill-rule="evenodd" d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8zm8-7a7 7 0 0 0-5.468 11.37C3.242 11.226 4.805 10 8 10s4.757 1.225 5.468 2.37A7 7 0 0 0 8 1z"/>
+</svg>"#
+                }
             }
         }
-    })
-}
-
-#[inline_props]
-fn StackableCard<'a>(cx: Scope, offset: usize, last: bool, children: Element<'a>) -> Element {
-    let rem = if last == &true { *offset } else { offset + 6 };
-    cx.render(rsx! {
-        div { class: "sticky", style: "height: calc(100vh - {rem}rem); top: {offset}rem", children }
-    })
-}
-
-#[inline_props]
-fn Card<'a>(cx: Scope, children: Element<'a>) -> Element {
-    cx.render(rsx! {
-        div { class: "h-full rounded-xl bg-white dark:bg-gray-800 p-3 border-gray-950 border", children }
     })
 }
