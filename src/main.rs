@@ -421,7 +421,7 @@ mod backend {
 
         pub async fn insert_post(&self, body: String, account_id: i64) -> Result<Post, AppError> {
             let now = Self::now();
-            let InsertPost { id } = sqlx::query_as!(
+            let rows = sqlx::query_as!(
                 InsertPost,
                 "insert into posts (body, account_id, created_at, updated_at) values (?, ?, ?, ?) returning id",
                 body,
@@ -429,8 +429,9 @@ mod backend {
                 now,
                 now
             )
-            .fetch_one(&self.connection)
+            .fetch_all(&self.connection)
             .await?;
+            let id = rows.first().expect("post was not inserted into the db correctly").id;
             let post = self.post_by_id(id).await?;
             Ok(post)
         }
@@ -962,7 +963,7 @@ fn NewPost(cx: Scope) -> Element {
                     modal_view_state.set(None);
                 }
                 Ok(None) => todo!(),
-                Err(_) => todo!(),
+                Err(err) => log::info!("{}", err),
             }
         });
     };
