@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 /*
+    TODO: fix padding on ios safari?
     TODO: profile photos
     TODO: posts
     TODO: likes
@@ -889,7 +890,8 @@ fn Posts(cx: Scope) -> Element {
     });
     cx.render(rsx! {
         div {
-            class: "snap-mandatory snap-y overflow-y-auto h-screen max-w-md mx-auto",
+            class: "snap-mandatory snap-y overflow-y-auto max-w-md mx-auto",
+            style: "height: 100dvh",
             posts
         }
     })
@@ -902,9 +904,10 @@ fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
     let initial = post.account_initial();
     cx.render(rsx! {
         div {
-            class: "snap-center h-full flex items-center justify-center flex-col relative",
+            class: "snap-center flex items-center justify-center flex-col relative",
+            style: "height: 100dvh",
             div { 
-                class: "", "{post.body}"
+                class: "text-center text-[min(10vw,50px)]", "{post.body}"
             }
             div { class: "flex flex-col gap-6 items-center absolute bottom-24 right-4 z-20",
                 button { class: "opacity-80", onclick: move |_| {} }
