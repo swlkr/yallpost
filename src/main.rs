@@ -705,7 +705,24 @@ enum View {
     ShowAccount,
     Messages,
     Add,
-    Profile(Account)
+    Profile(Account),
+}
+
+#[inline_props]
+fn NavButton<'a>(cx: Scope, text: &'a str, icon: Icons, onclick: EventHandler<'a, MouseEvent>) -> Element {
+    cx.render(rsx! {
+        button {
+            onclick: move |e| onclick.call(e),
+            div {
+                class: "flex flex-col gap-1 items-center justify-center",
+                div {
+                    class: "md:hidden",
+                    Icon { icon: icon }
+                }
+                p { "{text}" }
+            }
+        }
+    })
 }
 
 fn Nav(cx: Scope) -> Element {
@@ -714,36 +731,47 @@ fn Nav(cx: Scope) -> Element {
     let set_modal_view = use_set(cx, MODAL_VIEW);
     let logged_in = account.is_some();
     cx.render(rsx! {
-        div { class: "bg-gray-900 text-white p-4 fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-6 standalone:pb-8 z-30",
+        div { class: "bg-gray-900 text-white fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-3 standalone:pb-8 z-30",
             div { class: "flex lg:justify-center lg:gap-4 justify-around",
-                button { onclick: move |_| set_view(View::Posts), Icon { icon: Icons::House } }
-                button { onclick: move |_| set_view(View::Search), Icon { icon: Icons::Search } }
-                button {
-                    onclick: move |_| { 
+                NavButton {
+                    onclick: move |_| set_view(View::Posts),
+                    icon: Icons::House,
+                    text: "Home"
+                }
+                NavButton {
+                    onclick: move |_| set_view(View::Search),
+                    icon: Icons::Search,
+                    text: "Search"
+                }
+                NavButton {
+                    onclick: move |_| {
                         match logged_in {
                             true => set_modal_view(Some(View::Add)),
                             false => set_modal_view(Some(View::Signup))
                         }
                     },
-                    Icon { icon: Icons::PlusSquare }
+                    icon: Icons::PlusSquare,
+                    text: "New Post"
                 }
-                button { 
+                NavButton {
                     onclick: move |_| {
                         match logged_in {
                             true => set_view(View::Messages),
                             false => set_modal_view(Some(View::Signup))
                         }
                     },
-                    Icon { icon: Icons::ChatLeftDots } 
+                    icon: Icons::ChatLeftDots,
+                    text: "DM"
                 }
-                button { 
+                NavButton {
                     onclick: move |_| { 
                         match logged_in { 
                             true => set_view(View::ShowAccount), 
                             false => set_modal_view(Some(View::Signup))
                         }
                     },
-                    Icon { icon: Icons::PersonCircle }
+                    icon: Icons::PersonCircle,
+                    text: "Profile"
                 }
             }
         }
@@ -852,7 +880,7 @@ fn Root(cx: Scope) -> Element {
     };
     cx.render(rsx! {
         div { 
-            class: "dark:bg-gray-950 dark:text-white text-gray-950 min-h-screen {scroll_class}",
+            class: "dark:bg-gray-950 dark:text-white text-gray-950 h-[100dvh] {scroll_class}",
             Nav {}
             ComponentFromView { view: view }
             modal_component
@@ -891,39 +919,24 @@ fn Posts(cx: Scope) -> Element {
     });
     cx.render(rsx! {
         div {
-            class: "snap-mandatory snap-y overflow-y-auto max-w-md mx-auto",
-            style: "height: 100dvh",
+            class: "snap-mandatory snap-y overflow-y-auto max-w-md mx-auto h-[calc(100dvh-76px)] md:h-[100dvh]",
             posts
         }
     })
 }
-
-const SMALL_FONT_MAX_LEN: usize = 140;
 
 #[inline_props]
 fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
     let set_modal_view = use_set(cx, MODAL_VIEW);
     let set_view = use_set(cx, VIEW);
     let initial = post.account_initial();
-    // font size min: 16px
-    // font size max: 50px
-    // the font size should be inversely proportional to the length of the post.body
-    // for example
-    // length 420 should have font size 16px
-    // length 100 should have font size 16px
-    // length 10 should have 50px
-    let font_size = match post.body.chars().count() > SMALL_FONT_MAX_LEN {
-        true => 18,
-        false => 50,
-    };
     cx.render(rsx! {
         div {
-            class: "snap-center flex items-center justify-start pt-16 flex-col relative",
-            style: "height: 100dvh",
+            class: "snap-center flex items-center justify-center flex-col relative h-full",
             div { 
-                class: "text-center text-[min(10vw,{font_size}px)] height-3/5 overflow-y-auto", "{post.body}"
+                class: "text-center text-2xl", "{post.body}"
             }
-            div { class: "flex flex-col gap-6 items-center absolute bottom-24 right-4 z-20",
+            div { class: "flex flex-col gap-6 items-center absolute bottom-4 right-4 z-20",
                 button { class: "opacity-80", onclick: move |_| {} }
                 button {
                     class: "opacity-80", 
@@ -933,7 +946,7 @@ fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
                             false => set_modal_view(Some(View::Signup))
                         }
                     }, 
-                    Icon { size: 32, icon: Icons::HeartFill } 
+                    Icon { size: 32, icon: &Icons::HeartFill }
                 }
                 button { 
                     class: "opacity-80",
@@ -943,7 +956,7 @@ fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
                             false => set_modal_view(Some(View::Signup))
                         }
                     },
-                    Icon { size: 32, icon: Icons::ChatFill } 
+                    Icon { size: 32, icon: &Icons::ChatFill }
                 }
                 button {
                     class: "opacity-80",
@@ -1364,7 +1377,7 @@ enum Icons {
 }
 
 #[inline_props]
-fn Icon(cx: Scope, icon: Icons, size: Option<usize>) -> Element {
+fn Icon<'a>(cx: Scope, icon: &'a Icons, size: Option<usize>) -> Element {
     let size = size.unwrap_or(24);
     let width = size;
     let height = size;
