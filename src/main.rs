@@ -898,17 +898,30 @@ fn Posts(cx: Scope) -> Element {
     })
 }
 
+const SMALL_FONT_MAX_LEN: usize = 140;
+
 #[inline_props]
 fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
     let set_modal_view = use_set(cx, MODAL_VIEW);
     let set_view = use_set(cx, VIEW);
     let initial = post.account_initial();
+    // font size min: 16px
+    // font size max: 50px
+    // the font size should be inversely proportional to the length of the post.body
+    // for example
+    // length 420 should have font size 16px
+    // length 100 should have font size 16px
+    // length 10 should have 50px
+    let font_size = match post.body.chars().count() > SMALL_FONT_MAX_LEN {
+        true => 18,
+        false => 50,
+    };
     cx.render(rsx! {
         div {
-            class: "snap-center flex items-center justify-center flex-col relative",
+            class: "snap-center flex items-center justify-start pt-16 flex-col relative",
             style: "height: 100dvh",
             div { 
-                class: "text-center text-[min(10vw,50px)]", "{post.body}"
+                class: "text-center text-[min(10vw,{font_size}px)] height-3/5 overflow-y-auto", "{post.body}"
             }
             div { class: "flex flex-col gap-6 items-center absolute bottom-24 right-4 z-20",
                 button { class: "opacity-80", onclick: move |_| {} }
