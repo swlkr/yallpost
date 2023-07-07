@@ -720,7 +720,7 @@ fn NavButton<'a>(cx: Scope, text: &'a str, icon: Icons, onclick: EventHandler<'a
                     class: "md:hidden",
                     Icon { icon: icon }
                 }
-                p { "{text}" }
+                p { class: "hidden md:block", "{text}" }
             }
         }
     })
@@ -732,7 +732,7 @@ fn Nav(cx: Scope) -> Element {
     let set_modal_view = use_set(cx, MODAL_VIEW);
     let logged_in = account.is_some();
     cx.render(rsx! {
-        div { class: "bg-gray-900 text-white fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-3 standalone:pb-8 z-30",
+        div { class: "bg-gray-900 text-white fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-4 z-30",
             div { class: "flex lg:justify-center lg:gap-4 justify-around",
                 NavButton {
                     onclick: move |_| set_view(View::Posts),
@@ -920,7 +920,7 @@ fn Posts(cx: Scope) -> Element {
     });
     cx.render(rsx! {
         div {
-            class: "snap-mandatory snap-y overflow-y-auto max-w-md mx-auto h-[calc(100dvh-76px)] md:h-[100dvh]",
+            class: "snap-mandatory snap-y overflow-y-auto max-w-md mx-auto h-[calc(100dvh-56px)] md:h-[100dvh]",
             posts
         }
     })
