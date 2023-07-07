@@ -1,13 +1,14 @@
 #![allow(non_snake_case)]
 
 /*
-    TODO: fix padding on ios safari?
+    TODO: likes
+    TODO: search
+    TODO: dms
+    TODO: profiles
     TODO: profile photos
     TODO: posts
-    TODO: likes
     TODO: comments
     TODO: timeline posts
-    TODO: recommended posts
     TODO: meta tags
 */
 use dioxus::prelude::*;
