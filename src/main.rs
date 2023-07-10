@@ -43,7 +43,7 @@ mod frontend {
 #[cfg(backend)]
 mod backend {
     use super::*;
-    use crate::models::{Post, InsertPost};
+    use crate::models::{Post, InsertPost, Like};
     use axum::{
         body::{Body, Full},
         extract::State,
@@ -166,7 +166,7 @@ mod backend {
             .account_by_id(session.unwrap_or_default().account_id)
             .await
             .ok();
-        let posts = db.posts().await.unwrap_or_default();
+        let posts = db.posts(account.clone()).await.unwrap_or_default();
         let view = View::default();
         let server_props = ServerProps {
             account,
@@ -273,18 +273,18 @@ mod backend {
 
     #[derive(Debug, Clone)]
     pub struct Database {
-        connection: SqlitePool,
+        pool: SqlitePool,
     }
 
     impl Database {
         pub async fn new(filename: String) -> Self {
             Self {
-                connection: Self::pool(&filename).await,
+                pool: Self::pool(&filename).await,
             }
         }
 
         pub async fn migrate(&self) -> Result<(), AppError> {
-            let result = sqlx::migrate!().run(&self.connection).await;
+            let result = sqlx::migrate!().run(&self.pool).await;
             match result {
                 Ok(_) => Ok(()),
                 Err(err) => panic!("{}", err),
@@ -300,13 +300,13 @@ mod backend {
                 if migration.migration_type.is_down_migration() {
                     let version = migration.version;
                     match sqlx::query(&migration.sql)
-                        .execute(&self.connection)
+                        .execute(&self.pool)
                         .await
                         .map_err(|_| AppError::Rollback)
                     {
                         Ok(_) => sqlx::query("delete from _sqlx_migrations where version = ?")
                             .bind(version)
-                            .execute(&self.connection)
+                            .execute(&self.pool)
                             .await
                             .map_err(|_| AppError::Rollback),
                         Err(_) => Err(AppError::Rollback),
@@ -346,7 +346,7 @@ mod backend {
         pub async fn insert_account(&self, name: String) -> Result<Account, AppError> {
             let token = nanoid::nanoid!();
             let now = Self::now();
-            let account= match sqlx::query_as!(Account, "insert into accounts (name, login_code, updated_at, created_at) values (?, ?, ?, ?) returning *", name, token, now, now).fetch_one(&self.connection).await {
+            let account= match sqlx::query_as!(Account, "insert into accounts (name, login_code, updated_at, created_at) values (?, ?, ?, ?) returning *", name, token, now, now).fetch_one(&self.pool).await {
                 Ok(a) => a,
                 Err(err) =>  match err {
                     // this *is* a unique index error
@@ -364,14 +364,14 @@ mod backend {
         pub async fn insert_session(&self, account_id: i64) -> Result<Session, AppError> {
             let identifier = nanoid::nanoid!();
             let now = Self::now();
-            let session = sqlx::query_as!(Session, "insert into sessions (identifier, account_id, updated_at, created_at) values (?, ?, ?, ?) returning *", identifier, account_id, now, now).fetch_one(&self.connection).await?;
+            let session = sqlx::query_as!(Session, "insert into sessions (identifier, account_id, updated_at, created_at) values (?, ?, ?, ?) returning *", identifier, account_id, now, now).fetch_one(&self.pool).await?;
             Ok(session)
         }
 
         pub async fn account_by_id(&self, id: i64) -> Result<Account, AppError> {
             let account =
                 sqlx::query_as!(Account, "select * from accounts where id = ? limit 1", id)
-                    .fetch_one(&self.connection)
+                    .fetch_one(&self.pool)
                     .await?;
             Ok(account)
         }
@@ -382,7 +382,7 @@ mod backend {
                 "select * from sessions where identifier = ? limit 1",
                 identifier
             )
-            .fetch_one(&self.connection)
+            .fetch_one(&self.pool)
             .await?;
             Ok(session)
         }
@@ -393,7 +393,7 @@ mod backend {
                 "select * from accounts where login_code = ? limit 1",
                 login_code
             )
-            .fetch_one(&self.connection)
+            .fetch_one(&self.pool)
             .await?;
             Ok(account)
         }
@@ -407,7 +407,7 @@ mod backend {
                 "delete from sessions where identifier = ? returning *",
                 identifier
             )
-            .fetch_one(&self.connection)
+            .fetch_one(&self.pool)
             .await?;
             Ok(session)
         }
@@ -415,41 +415,74 @@ mod backend {
         pub async fn delete_account_by_id(&self, id: i64) -> Result<Account, AppError> {
             let account =
                 sqlx::query_as!(Account, "delete from accounts where id = ? returning *", id)
-                    .fetch_one(&self.connection)
+                    .fetch_one(&self.pool)
                     .await?;
             Ok(account)
         }
 
-        pub async fn insert_post(&self, body: String, account_id: i64) -> Result<Post, AppError> {
+        pub async fn insert_post(&self, body: String, current_account: Account) -> Result<Post, AppError> {
             let now = Self::now();
             let rows = sqlx::query_as!(
                 InsertPost,
                 "insert into posts (body, account_id, created_at, updated_at) values (?, ?, ?, ?) returning id",
                 body,
-                account_id,
+                current_account.id,
                 now,
                 now
             )
-            .fetch_all(&self.connection)
+            .fetch_all(&self.pool)
             .await?;
             let id = rows.first().expect("post was not inserted into the db correctly").id;
-            let post = self.post_by_id(id).await?;
+            let post = self.post_by_id(id,Some(current_account)).await?;
             Ok(post)
         }
 
-        async fn post_by_id(&self, id: i64) -> Result<Post, AppError> {
-            let post = sqlx::query_as!(Post, "select posts.*, accounts.name as account_name from posts join accounts on accounts.id = posts.account_id where posts.id = ?", id).fetch_one(&self.connection).await?;
+        async fn post_by_id(&self, id: i64, current_account: Option<Account>) -> Result<Post, AppError> {
+            let current_account_id = current_account.unwrap_or_default().id;
+            let post = sqlx::query_as!(
+                Post, 
+                r#"
+                    select
+                        posts.*,
+                        accounts.name as account_name,
+                        likes.id as liked_by_current_account
+                    from posts
+                    join accounts on accounts.id = posts.account_id
+                    left join likes on likes.post_id = posts.id and likes.account_id = ?
+                    where posts.id = ?
+                "#, current_account_id, id).fetch_one(&self.pool).await?;
             Ok(post)
         }
 
-        async fn posts(&self) -> Result<Vec<Post>, AppError> {
+        async fn posts(&self, current_account: Option<Account>) -> Result<Vec<Post>, AppError> {
+            let current_account_id = current_account.unwrap_or_default().id;
             let posts = sqlx::query_as!(
                 Post,
-                "select posts.*, accounts.name as account_name from posts join accounts on accounts.id = posts.account_id order by posts.created_at desc limit 30"
+                r#"
+                    select
+                        posts.*,
+                        accounts.name as account_name,
+                        likes.id as liked_by_current_account
+                    from posts
+                    join accounts on accounts.id = posts.account_id
+                    left join likes on likes.post_id = posts.id and likes.account_id = ?
+                    order by posts.created_at desc
+                    limit 30
+                "#,
+                current_account_id
             )
-            .fetch_all(&self.connection)
+            .fetch_all(&self.pool)
             .await?;
             Ok(posts)
+        }
+
+        pub async fn like(&self, account_id: i64, post_id: i64) -> Result<Like, AppError> {
+            let now = Self::now();
+            let like = sqlx::query_as!(Like,
+                "insert into likes (account_id, post_id, created_at, updated_at) values (?, ?, ?, ?) returning *", account_id, post_id, now, now)
+            .fetch_one(&self.pool)
+            .await?;
+            Ok(like)
         }
     }
 
@@ -512,6 +545,7 @@ pub mod models {
         pub body: String,
         pub account_id: i64,
         pub account_name: String,
+        pub liked_by_current_account: Option<i64>,
         pub updated_at: i64,
         pub created_at: i64,
     }
@@ -525,6 +559,15 @@ pub mod models {
     #[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
     pub struct InsertPost {
         pub id: i64,
+    }
+
+    #[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
+    pub struct Like {
+        pub id: i64,
+        pub account_id: i64,
+        pub post_id: i64,
+        pub updated_at: i64,
+        pub created_at: i64,
     }
 }
 
@@ -617,6 +660,20 @@ async fn signup(
     Ok(Ok(account))
 }
 
+#[server(LikePost, "", "Cbor")]
+async fn like_post(sx: DioxusServerContext, post_id: i64) -> Result<Option<models::Like>, ServerFnError> {
+    let db = use_db(&sx);
+    if let Some(account) = get_account(&sx).await {
+        if let Ok(like) = db.like(account.id, post_id).await {
+            Ok(Some(like))
+        } else {
+            Ok(None)
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 impl From<AppError> for ServerFnError {
     fn from(_value: AppError) -> Self {
         ServerFnError::ServerError("Internal server error".to_string())
@@ -689,7 +746,7 @@ async fn add_post(sc: DioxusServerContext, body: String) -> Result<Option<Post>,
     let db = use_db(&sc);
     match get_account(&sc).await {
         Some(account) => {
-            let post = db.insert_post(body, account.id).await?;
+            let post = db.insert_post(body, account).await?;
             Ok(Some(post))
         }
         _ => Ok(None),
@@ -931,6 +988,26 @@ fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
     let set_modal_view = use_set(cx, MODAL_VIEW);
     let set_view = use_set(cx, VIEW);
     let initial = post.account_initial();
+    let posts = use_atom_state(cx, POSTS);
+    let on_like = move |post_id: i64| {
+        let sc = cx.sc();
+        to_owned![posts];
+        cx.spawn(async move {
+            if let Ok(Some(like)) = like_post(sc, post_id).await {
+                posts.with_mut(|posts| {
+                    for post in posts {
+                        if post.id == like.post_id {
+                            post.liked_by_current_account = Some(like.id);
+                        }
+                    }
+                })
+            }
+        })
+    };
+    let liked_class = match post.liked_by_current_account {
+        Some(_) => "text-red-500",
+        None => ""
+    };
     cx.render(rsx! {
         div {
             class: "snap-center flex items-center justify-center flex-col relative h-full",
@@ -943,11 +1020,14 @@ fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
                     class: "opacity-80", 
                     onclick: move |_| {
                         match logged_in {
-                            true => {},
+                            true => on_like(post.id),
                             false => set_modal_view(Some(View::Signup))
                         }
-                    }, 
-                    Icon { size: 32, icon: &Icons::HeartFill }
+                    },
+                    div {
+                        class: "{liked_class}",
+                        Icon { size: 32, icon: &Icons::HeartFill }
+                    }
                 }
                 button { 
                     class: "opacity-80",
@@ -1168,6 +1248,7 @@ fn ShowAccount(cx: Scope) -> Element {
     let account = use_app_state(cx, ACCOUNT);
     let account_state = use_atom_state(cx, ACCOUNT);
     let view_state = use_atom_state(cx, VIEW);
+    let posts_state = use_atom_state(cx, POSTS);
     let login_code = match account {
         Some(a) => a.login_code.to_string(),
         None => String::default(),
@@ -1175,10 +1256,15 @@ fn ShowAccount(cx: Scope) -> Element {
     let on_logout = move |_| {
         let sc = cx.sc();
         cx.spawn({
-            to_owned![account_state, view_state];
+            to_owned![account_state, view_state, posts_state];
             async move {
                 if let Ok(_) = logout(sc).await {
                     account_state.set(None);
+                    posts_state.with_mut(|posts| {
+                        for post in posts {
+                            post.liked_by_current_account = None;
+                        }
+                    });
                     view_state.set(View::Posts);
                 }
             }

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "select posts.*, accounts.name as account_name from posts join accounts on accounts.id = posts.account_id order by posts.created_at desc limit 30",
+  "query": "\n                    select\n                        posts.*, \n                        accounts.name as account_name,\n                        likes.id as liked_by_current_account\n                    from posts\n                    join accounts on accounts.id = posts.account_id\n                    left join likes on likes.account_id = posts.account_id and likes.account_id = ?\n                    where posts.id = ?\n                ",
   "describe": {
     "columns": [
       {
@@ -32,10 +32,15 @@
         "name": "account_name",
         "ordinal": 5,
         "type_info": "Text"
+      },
+      {
+        "name": "liked_by_current_account",
+        "ordinal": 6,
+        "type_info": "Int64"
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 2
     },
     "nullable": [
       false,
@@ -43,8 +48,9 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "c09f10e8894065f0aa1d4bd0b10574451af87ff0dee5f8ab1394b90e1e96a17a"
+  "hash": "fb45ad253133a2c2807bbe1892f58576e678e96b776505e631e653ea92358242"
 }
