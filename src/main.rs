@@ -444,11 +444,17 @@ mod backend {
                 r#"
                     select
                         posts.*,
+                        like_counts.like_count as "like_count?: i64",
                         accounts.name as account_name,
                         likes.id as liked_by_current_account
                     from posts
                     join accounts on accounts.id = posts.account_id
                     left join likes on likes.post_id = posts.id and likes.account_id = ?
+                    left join (
+                        select likes.post_id, count(likes.id) as like_count
+                        from likes
+                        group by likes.post_id
+                    ) like_counts on like_counts.post_id = posts.id
                     where posts.id = ?
                 "#, current_account_id, id).fetch_one(&self.pool).await?;
             Ok(post)
@@ -461,11 +467,17 @@ mod backend {
                 r#"
                     select
                         posts.*,
+                        like_counts.like_count as "like_count?: i64",
                         accounts.name as account_name,
                         likes.id as liked_by_current_account
                     from posts
                     join accounts on accounts.id = posts.account_id
                     left join likes on likes.post_id = posts.id and likes.account_id = ?
+                    left join (
+                        select likes.post_id, count(likes.id) as like_count
+                        from likes
+                        group by likes.post_id
+                    ) like_counts on like_counts.post_id = posts.id
                     order by posts.created_at desc
                     limit 30
                 "#,
@@ -545,6 +557,7 @@ pub mod models {
         pub body: String,
         pub account_id: i64,
         pub account_name: String,
+        pub like_count: Option<i64>,
         pub liked_by_current_account: Option<i64>,
         pub updated_at: i64,
         pub created_at: i64,
@@ -973,7 +986,7 @@ fn Posts(cx: Scope) -> Element {
     let posts = use_app_state(cx, POSTS);
     let logged_in = account.is_some();
     let posts = posts.into_iter().map(|p| {
-        rsx! { ShowPost { key: "{p.id}", post: p, logged_in: logged_in } }
+        rsx! { PostComponent { key: "{p.id}", post: p, logged_in: logged_in } }
     });
     cx.render(rsx! {
         div {
@@ -984,7 +997,7 @@ fn Posts(cx: Scope) -> Element {
 }
 
 #[inline_props]
-fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
+fn PostComponent(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
     let set_modal_view = use_set(cx, MODAL_VIEW);
     let set_view = use_set(cx, VIEW);
     let initial = post.account_initial();
@@ -998,6 +1011,7 @@ fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
                     for post in posts {
                         if post.id == like.post_id {
                             post.liked_by_current_account = Some(like.id);
+                            post.like_count = Some(post.like_count.unwrap_or(0) + 1);
                         }
                     }
                 })
@@ -1008,6 +1022,7 @@ fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
         Some(_) => "text-red-500",
         None => ""
     };
+    let like_count = post.like_count.unwrap_or(0);
     cx.render(rsx! {
         div {
             class: "snap-center flex items-center justify-center flex-col relative h-full",
@@ -1017,7 +1032,7 @@ fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
             div { class: "flex flex-col gap-6 items-center absolute bottom-4 right-4 z-20",
                 button { class: "opacity-80", onclick: move |_| {} }
                 button {
-                    class: "opacity-80", 
+                    class: "opacity-80 flex flex-col items-center",
                     onclick: move |_| {
                         match logged_in {
                             true => on_like(post.id),
@@ -1028,6 +1043,7 @@ fn ShowPost(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
                         class: "{liked_class}",
                         Icon { size: 32, icon: &Icons::HeartFill }
                     }
+                    div { "{like_count}" }
                 }
                 button { 
                     class: "opacity-80",
