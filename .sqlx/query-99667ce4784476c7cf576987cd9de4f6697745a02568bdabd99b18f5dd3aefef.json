@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                    select\n                        comments.*,\n                        accounts.name as \"account_name!: String\"\n                    from comments\n                    left outer join accounts on accounts.id = comments.account_id\n                    where comments.id = ?\n                    limit 1\n                ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "account_id",
+        "ordinal": 1,
+        "type_info": "Int64"
+      },
+      {
+        "name": "post_id",
+        "ordinal": 2,
+        "type_info": "Int64"
+      },
+      {
+        "name": "body",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 4,
+        "type_info": "Int64"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Int64"
+      },
+      {
+        "name": "account_name!: String",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "99667ce4784476c7cf576987cd9de4f6697745a02568bdabd99b18f5dd3aefef"
+}

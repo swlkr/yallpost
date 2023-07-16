@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "delete from likes where post_id = ? and account_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a249c7e8c2fd83358e5532b18d38946078d7429f69dd6efb79418a986289ca8a"
+}

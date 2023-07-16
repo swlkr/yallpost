@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                    select\n                        posts.*,\n                        like_counts.like_count as \"like_count?: i64\",\n                        accounts.name as account_name,\n                        likes.account_id as liked_by_current_account,\n                        comment_counts.count as \"comment_count!: i64\"\n                    from posts\n                    join accounts on accounts.id = posts.account_id\n                    left join likes on likes.post_id = posts.id and likes.account_id = ?\n                    left join (\n                        select likes.post_id, count(likes.id) as like_count\n                        from likes\n                        group by likes.post_id\n                    ) like_counts on like_counts.post_id = posts.id\n                    left join (\n                        select comments.post_id, count(comments.id) as count\n                        from comments\n                        group by comments.post_id\n                    ) comment_counts on comment_counts.post_id = posts.id\n                    where posts.id = ?\n                ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "body",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "account_id",
+        "ordinal": 2,
+        "type_info": "Int64"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 3,
+        "type_info": "Int64"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Int64"
+      },
+      {
+        "name": "like_count?: i64",
+        "ordinal": 5,
+        "type_info": "Int64"
+      },
+      {
+        "name": "account_name",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "liked_by_current_account",
+        "ordinal": 7,
+        "type_info": "Int64"
+      },
+      {
+        "name": "comment_count!: i64",
+        "ordinal": 8,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "9ce92c61a2f94e7b248c3f80198190f0d88acae099796ec7f87e7c1079c667bf"
+}

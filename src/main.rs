@@ -1,23 +1,24 @@
 #![allow(non_snake_case)]
 
 /*
-    TODO: likes
+    TODO: allow rotating login code
+    TODO: comments
     TODO: search
     TODO: dms
     TODO: profiles
     TODO: profile photos
     TODO: posts
-    TODO: comments
+    TODO: like animations
     TODO: timeline posts
     TODO: meta tags
 */
 use dioxus::prelude::*;
 use dioxus_fullstack::prelude::*;
 use fermi::prelude::*;
-use models::{Account, Post, Session};
+use justerror::Error;
+use models::{Account, Comment, HasAccount, Post, Session};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use thiserror;
 
 fn main() {
     #[cfg(frontend)]
@@ -43,7 +44,7 @@ mod frontend {
 #[cfg(backend)]
 mod backend {
     use super::*;
-    use crate::models::{Post, InsertPost, Like};
+    use crate::models::{Comment, InsertPost, Like, Post};
     use axum::{
         body::{Body, Full},
         extract::State,
@@ -57,10 +58,7 @@ mod backend {
     use mime_guess;
     use rust_embed::RustEmbed;
     use sqlx::{
-        sqlite::{
-            SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteQueryResult,
-            SqliteSynchronous,
-        },
+        sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
         SqlitePool,
     };
     use std::collections::HashMap;
@@ -166,7 +164,7 @@ mod backend {
             .account_by_id(session.unwrap_or_default().account_id)
             .await
             .ok();
-        let posts = db.posts(account.clone()).await.unwrap_or_default();
+        let posts = db.posts(account.as_ref()).await.unwrap_or_default();
         let view = View::default();
         let server_props = ServerProps {
             account,
@@ -217,7 +215,28 @@ mod backend {
             match value {
                 sqlx::Error::RowNotFound => AppError::NotFound,
                 sqlx::Error::Migrate(_) => AppError::Migrate,
+                sqlx::Error::Database(err) => {
+                    if err.is_unique_violation() {
+                        AppError::DatabaseUniqueIndex
+                    } else {
+                        AppError::Database
+                    }
+                }
                 _ => AppError::Database,
+            }
+        }
+    }
+
+    impl From<sqlx::migrate::MigrateError> for AppError {
+        fn from(value: sqlx::migrate::MigrateError) -> Self {
+            match value {
+                sqlx::migrate::MigrateError::Execute(_) => todo!(),
+                sqlx::migrate::MigrateError::Source(_) => todo!(),
+                sqlx::migrate::MigrateError::VersionMissing(_) => todo!(),
+                sqlx::migrate::MigrateError::VersionMismatch(_) => todo!(),
+                sqlx::migrate::MigrateError::InvalidMixReversibleAndSimple => todo!(),
+                sqlx::migrate::MigrateError::Dirty(_) => todo!(),
+                _ => todo!(),
             }
         }
     }
@@ -247,7 +266,7 @@ mod backend {
     where
         T: Into<String>,
     {
-        fn maybe_response(self) -> Result<Response, AppError> {
+        fn maybe_response(self) -> Result<Response> {
             let path = self.0.into();
             let asset = Assets::get(path.as_str()).ok_or(AppError::NotFound)?;
             let body = axum::body::boxed(Full::from(asset.data));
@@ -276,6 +295,8 @@ mod backend {
         pool: SqlitePool,
     }
 
+    type Result<T> = std::result::Result<T, AppError>;
+
     impl Database {
         pub async fn new(filename: String) -> Self {
             Self {
@@ -283,40 +304,27 @@ mod backend {
             }
         }
 
-        pub async fn migrate(&self) -> Result<(), AppError> {
-            let result = sqlx::migrate!().run(&self.pool).await;
-            match result {
-                Ok(_) => Ok(()),
-                Err(err) => panic!("{}", err),
-            }
+        pub async fn migrate(&self) -> Result<()> {
+            sqlx::migrate!().run(&self.pool).await?;
+            Ok(())
         }
 
-        pub async fn rollback(&self) -> Result<SqliteQueryResult, AppError> {
+        pub async fn rollback(&self) -> Result<()> {
             let migrations = sqlx::migrate!()
                 .migrations
                 .iter()
                 .filter(|m| m.migration_type.is_down_migration());
-            if let Some(migration) = migrations.last() {
-                if migration.migration_type.is_down_migration() {
-                    let version = migration.version;
-                    match sqlx::query(&migration.sql)
-                        .execute(&self.pool)
-                        .await
-                        .map_err(|_| AppError::Rollback)
-                    {
-                        Ok(_) => sqlx::query("delete from _sqlx_migrations where version = ?")
-                            .bind(version)
-                            .execute(&self.pool)
-                            .await
-                            .map_err(|_| AppError::Rollback),
-                        Err(_) => Err(AppError::Rollback),
-                    }
-                } else {
-                    Err(AppError::Rollback)
-                }
-            } else {
-                Err(AppError::Rollback)
+            let Some(migration) = migrations.last() else { return Err(AppError::Rollback); };
+            if !migration.migration_type.is_down_migration() {
+                return Err(AppError::Rollback);
             }
+            let version = migration.version;
+            sqlx::query(&migration.sql).execute(&self.pool).await?;
+            sqlx::query("delete from _sqlx_migrations where version = ?")
+                .bind(version)
+                .execute(&self.pool)
+                .await?;
+            Ok(())
         }
 
         fn connection_options(filename: &str) -> SqliteConnectOptions {
@@ -336,39 +344,28 @@ mod backend {
                 .unwrap()
         }
 
-        fn now() -> f64 {
+        pub fn now() -> f64 {
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("unable to get epoch in now")
                 .as_secs_f64()
         }
 
-        pub async fn insert_account(&self, name: String) -> Result<Account, AppError> {
+        pub async fn insert_account(&self, name: String) -> Result<Account> {
             let token = nanoid::nanoid!();
             let now = Self::now();
-            let account= match sqlx::query_as!(Account, "insert into accounts (name, login_code, updated_at, created_at) values (?, ?, ?, ?) returning *", name, token, now, now).fetch_one(&self.pool).await {
-                Ok(a) => a,
-                Err(err) =>  match err {
-                    // this *is* a unique index error
-                    sqlx::Error::Database(err) => if err.is_unique_violation() {
-                        return Err(AppError::DatabaseUniqueIndex);
-                    } else {
-                        return Err(AppError::Database);
-                    }
-                    _ => return Err(AppError::Database),
-                }
-            };
+            let account= sqlx::query_as!(Account, "insert into accounts (name, login_code, updated_at, created_at) values (?, ?, ?, ?) returning *", name, token, now, now).fetch_one(&self.pool).await?;
             Ok(account)
         }
 
-        pub async fn insert_session(&self, account_id: i64) -> Result<Session, AppError> {
+        pub async fn insert_session(&self, account_id: i64) -> Result<Session> {
             let identifier = nanoid::nanoid!();
             let now = Self::now();
             let session = sqlx::query_as!(Session, "insert into sessions (identifier, account_id, updated_at, created_at) values (?, ?, ?, ?) returning *", identifier, account_id, now, now).fetch_one(&self.pool).await?;
             Ok(session)
         }
 
-        pub async fn account_by_id(&self, id: i64) -> Result<Account, AppError> {
+        pub async fn account_by_id(&self, id: i64) -> Result<Account> {
             let account =
                 sqlx::query_as!(Account, "select * from accounts where id = ? limit 1", id)
                     .fetch_one(&self.pool)
@@ -376,7 +373,7 @@ mod backend {
             Ok(account)
         }
 
-        pub async fn session_by_identifer(&self, identifier: &str) -> Result<Session, AppError> {
+        pub async fn session_by_identifer(&self, identifier: &str) -> Result<Session> {
             let session = sqlx::query_as!(
                 Session,
                 "select * from sessions where identifier = ? limit 1",
@@ -387,7 +384,7 @@ mod backend {
             Ok(session)
         }
 
-        pub async fn account_by_login_code(&self, login_code: String) -> Result<Account, AppError> {
+        pub async fn account_by_login_code(&self, login_code: String) -> Result<Account> {
             let account = sqlx::query_as!(
                 Account,
                 "select * from accounts where login_code = ? limit 1",
@@ -398,10 +395,7 @@ mod backend {
             Ok(account)
         }
 
-        pub async fn delete_session_by_identifier(
-            &self,
-            identifier: &str,
-        ) -> Result<Session, AppError> {
+        pub async fn delete_session_by_identifier(&self, identifier: &str) -> Result<Session> {
             let session = sqlx::query_as!(
                 Session,
                 "delete from sessions where identifier = ? returning *",
@@ -412,7 +406,7 @@ mod backend {
             Ok(session)
         }
 
-        pub async fn delete_account_by_id(&self, id: i64) -> Result<Account, AppError> {
+        pub async fn delete_account_by_id(&self, id: i64) -> Result<Account> {
             let account =
                 sqlx::query_as!(Account, "delete from accounts where id = ? returning *", id)
                     .fetch_one(&self.pool)
@@ -420,7 +414,7 @@ mod backend {
             Ok(account)
         }
 
-        pub async fn insert_post(&self, body: String, current_account: Account) -> Result<Post, AppError> {
+        pub async fn insert_post(&self, body: String, current_account: Account) -> Result<Post> {
             let now = Self::now();
             let rows = sqlx::query_as!(
                 InsertPost,
@@ -432,21 +426,25 @@ mod backend {
             )
             .fetch_all(&self.pool)
             .await?;
-            let id = rows.first().expect("post was not inserted into the db correctly").id;
-            let post = self.post_by_id(id,Some(current_account)).await?;
+            let id = rows
+                .first()
+                .expect("post was not inserted into the db correctly")
+                .id;
+            let post = self.post_by_id(id, Some(current_account)).await?;
             Ok(post)
         }
 
-        async fn post_by_id(&self, id: i64, current_account: Option<Account>) -> Result<Post, AppError> {
+        pub async fn post_by_id(&self, id: i64, current_account: Option<Account>) -> Result<Post> {
             let current_account_id = current_account.unwrap_or_default().id;
             let post = sqlx::query_as!(
-                Post, 
+                Post,
                 r#"
                     select
                         posts.*,
                         like_counts.like_count as "like_count?: i64",
                         accounts.name as account_name,
-                        likes.id as liked_by_current_account
+                        likes.account_id as liked_by_current_account,
+                        comment_counts.count as "comment_count!: i64"
                     from posts
                     join accounts on accounts.id = posts.account_id
                     left join likes on likes.post_id = posts.id and likes.account_id = ?
@@ -455,13 +453,26 @@ mod backend {
                         from likes
                         group by likes.post_id
                     ) like_counts on like_counts.post_id = posts.id
+                    left join (
+                        select comments.post_id, count(comments.id) as count
+                        from comments
+                        group by comments.post_id
+                    ) comment_counts on comment_counts.post_id = posts.id
                     where posts.id = ?
-                "#, current_account_id, id).fetch_one(&self.pool).await?;
+                "#,
+                current_account_id,
+                id
+            )
+            .fetch_one(&self.pool)
+            .await?;
             Ok(post)
         }
 
-        async fn posts(&self, current_account: Option<Account>) -> Result<Vec<Post>, AppError> {
-            let current_account_id = current_account.unwrap_or_default().id;
+        pub async fn posts(&self, current_account: Option<&Account>) -> Result<Vec<Post>> {
+            let account_id = match current_account {
+                Some(account) => account.id,
+                None => 0,
+            };
             let posts = sqlx::query_as!(
                 Post,
                 r#"
@@ -469,7 +480,8 @@ mod backend {
                         posts.*,
                         like_counts.like_count as "like_count?: i64",
                         accounts.name as account_name,
-                        likes.id as liked_by_current_account
+                        likes.account_id as liked_by_current_account,
+                        comment_counts.count as "comment_count!: i64"
                     from posts
                     join accounts on accounts.id = posts.account_id
                     left join likes on likes.post_id = posts.id and likes.account_id = ?
@@ -478,23 +490,95 @@ mod backend {
                         from likes
                         group by likes.post_id
                     ) like_counts on like_counts.post_id = posts.id
+                    left join (
+                        select comments.post_id, count(comments.post_id) as count
+                        from comments
+                        group by comments.post_id
+                    ) comment_counts on comment_counts.post_id = posts.id
                     order by posts.created_at desc
                     limit 30
                 "#,
-                current_account_id
+                account_id
             )
             .fetch_all(&self.pool)
             .await?;
             Ok(posts)
         }
 
-        pub async fn like(&self, account_id: i64, post_id: i64) -> Result<Like, AppError> {
+        pub async fn insert_like(&self, account_id: i64, post_id: i64) -> Result<Like> {
             let now = Self::now();
             let like = sqlx::query_as!(Like,
                 "insert into likes (account_id, post_id, created_at, updated_at) values (?, ?, ?, ?) returning *", account_id, post_id, now, now)
             .fetch_one(&self.pool)
             .await?;
             Ok(like)
+        }
+
+        pub async fn delete_like(&self, account_id: i64, post_id: i64) -> Result<bool> {
+            sqlx::query_as!(
+                Like,
+                "delete from likes where post_id = ? and account_id = ?",
+                post_id,
+                account_id
+            )
+            .execute(&self.pool)
+            .await?;
+            Ok(true)
+        }
+
+        pub async fn insert_comment(
+            &self,
+            post_id: i64,
+            account_id: i64,
+            body: String,
+        ) -> Result<Comment> {
+            let now = Self::now();
+            let rows = sqlx::query_as!(Comment, r#"insert into comments (account_id, post_id, body, created_at, updated_at) values (?, ?, ?, ?, ?) returning *, '' as account_name"#, account_id, post_id, body, now, now).fetch_all(&self.pool).await?;
+            let id = rows
+                .first()
+                .expect("Failure inserting comment into the database")
+                .id;
+            let comment = self.comment_by_id(id).await?;
+            Ok(comment)
+        }
+
+        pub async fn comment_by_id(&self, id: i64) -> Result<Comment> {
+            let comment = sqlx::query_as!(
+                Comment,
+                r#"
+                    select
+                        comments.*,
+                        accounts.name as "account_name!: String"
+                    from comments
+                    left outer join accounts on accounts.id = comments.account_id
+                    where comments.id = ?
+                    limit 1
+                "#,
+                id
+            )
+            .fetch_one(&self.pool)
+            .await?;
+            Ok(comment)
+        }
+
+        pub async fn comments_by_post_id(&self, post_id: i64) -> Result<Vec<Comment>> {
+            let comments = sqlx::query_as!(
+                Comment,
+                r#"
+                    select
+                        comments.*,
+                        accounts.name as "account_name!: String"
+                    from comments
+                    left outer join accounts on accounts.id = comments.account_id
+                    where comments.post_id = ?
+                    order by comments.created_at
+                    limit 30
+                "#,
+                post_id
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            Ok(comments)
         }
     }
 
@@ -551,7 +635,7 @@ pub mod models {
         pub created_at: i64,
     }
 
-    #[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
+    #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug)]
     pub struct Post {
         pub id: i64,
         pub body: String,
@@ -561,14 +645,29 @@ pub mod models {
         pub liked_by_current_account: Option<i64>,
         pub updated_at: i64,
         pub created_at: i64,
+        pub comment_count: i64,
     }
 
-    impl Post {
-        pub fn account_initial(&self) -> String {
-            self.account_name.chars().next().unwrap().to_string()
+    pub trait HasAccount {
+        fn account(&self) -> Account;
+    }
+
+    impl HasAccount for Post {
+        fn account(&self) -> Account {
+            Account {
+                name: self.account_name.clone(),
+                id: self.account_id,
+                ..Default::default()
+            }
         }
     }
-    
+
+    impl Account {
+        pub fn initial(&self) -> String {
+            self.name.chars().next().unwrap().to_string()
+        }
+    }
+
     #[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
     pub struct InsertPost {
         pub id: i64,
@@ -582,29 +681,41 @@ pub mod models {
         pub updated_at: i64,
         pub created_at: i64,
     }
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+    pub struct Comment {
+        pub id: i64,
+        pub account_id: i64,
+        pub account_name: String,
+        pub post_id: i64,
+        pub body: String,
+        pub updated_at: i64,
+        pub created_at: i64,
+    }
+
+    impl HasAccount for Comment {
+        fn account(&self) -> Account {
+            Account {
+                name: self.account_name.clone(),
+                id: self.account_id,
+                ..Default::default()
+            }
+        }
+    }
 }
 
-#[derive(Clone, Serialize, Deserialize, thiserror::Error, Debug)]
+#[Error]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum AppError {
-    #[error("404 Not Found")]
     NotFound,
-    #[error("error decoding utf8 string")]
     Utf8,
-    #[error("http error")]
     Http,
-    #[error("unable to parse asset extension")]
     AssetExt,
-    #[error("error migrating")]
     Migrate,
-    #[error("error inserting into database")]
     DatabaseInsert,
-    #[error("error selecting row from database")]
     DatabaseSelect,
-    #[error("error from database")]
     Database,
-    #[error("error rolling back latest migration")]
     Rollback,
-    #[error("unique index error")]
     DatabaseUniqueIndex,
 }
 
@@ -674,10 +785,13 @@ async fn signup(
 }
 
 #[server(LikePost, "", "Cbor")]
-async fn like_post(sx: DioxusServerContext, post_id: i64) -> Result<Option<models::Like>, ServerFnError> {
+async fn like_post(
+    sx: DioxusServerContext,
+    post_id: i64,
+) -> Result<Option<models::Like>, ServerFnError> {
     let db = use_db(&sx);
     if let Some(account) = get_account(&sx).await {
-        if let Ok(like) = db.like(account.id, post_id).await {
+        if let Ok(like) = db.insert_like(account.id, post_id).await {
             Ok(Some(like))
         } else {
             Ok(None)
@@ -685,6 +799,24 @@ async fn like_post(sx: DioxusServerContext, post_id: i64) -> Result<Option<model
     } else {
         Ok(None)
     }
+}
+
+#[server(DislikePost, "", "Cbor")]
+async fn dislike_post(sx: DioxusServerContext, post_id: i64) -> Result<bool, ServerFnError> {
+    let db = use_db(&sx);
+    let Some(account) = get_account(&sx).await else { return Ok(false); };
+    let result = db.delete_like(account.id, post_id).await?;
+    Ok(result)
+}
+
+#[server(CommentsByPostId, "", "Cbor")]
+async fn comments_by_post_id(
+    sx: DioxusServerContext,
+    post_id: i64,
+) -> Result<Vec<Comment>, ServerFnError> {
+    let db = use_db(&sx);
+    let comments = db.comments_by_post_id(post_id).await?;
+    Ok(comments)
 }
 
 impl From<AppError> for ServerFnError {
@@ -697,7 +829,7 @@ impl From<AppError> for ServerFnError {
 async fn login(
     sx: DioxusServerContext,
     login_code: String,
-) -> Result<Option<Account>, ServerFnError> {
+) -> Result<Option<(Account, Vec<Post>)>, ServerFnError> {
     let db = use_db(&sx);
     if let Some(account) = db.account_by_login_code(login_code).await.ok() {
         let session = db.insert_session(account.id).await?;
@@ -705,7 +837,8 @@ async fn login(
             axum::http::header::SET_COOKIE,
             axum::http::HeaderValue::from_str(backend::set_cookie(session).as_str()).unwrap(),
         );
-        Ok(Some(account))
+        let posts = db.posts(Some(&account)).await?;
+        Ok(Some((account, posts)))
     } else {
         Ok(None)
     }
@@ -766,6 +899,18 @@ async fn add_post(sc: DioxusServerContext, body: String) -> Result<Option<Post>,
     }
 }
 
+#[server(LeaveComment, "", "Cbor")]
+async fn leave_comment(
+    sc: DioxusServerContext,
+    post_id: i64,
+    body: String,
+) -> Result<Option<Comment>, ServerFnError> {
+    let db = use_db(&sc);
+    let Some(account) = get_account(&sc).await else { return Ok(None) };
+    let comment = db.insert_comment(post_id, account.id, body).await?;
+    Ok(Some(comment))
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 enum View {
     #[default]
@@ -776,20 +921,21 @@ enum View {
     ShowAccount,
     Messages,
     Add,
+    Comments(Post),
     Profile(Account),
 }
 
 #[inline_props]
-fn NavButton<'a>(cx: Scope, text: &'a str, icon: Icons, onclick: EventHandler<'a, MouseEvent>) -> Element {
+fn NavButton<'a>(
+    cx: Scope,
+    text: &'a str,
+    icon: Icons,
+    onclick: EventHandler<'a, MouseEvent>,
+) -> Element {
     cx.render(rsx! {
-        button {
-            onclick: move |e| onclick.call(e),
-            div {
-                class: "flex flex-col gap-1 items-center justify-center",
-                div {
-                    class: "md:hidden",
-                    Icon { icon: icon }
-                }
+        button { onclick: move |e| onclick.call(e),
+            div { class: "flex flex-col gap-1 items-center justify-center",
+                div { class: "md:hidden", Icon { icon: icon } }
                 p { class: "hidden md:block", "{text}" }
             }
         }
@@ -802,13 +948,9 @@ fn Nav(cx: Scope) -> Element {
     let set_modal_view = use_set(cx, MODAL_VIEW);
     let logged_in = account.is_some();
     cx.render(rsx! {
-        div { class: "bg-gray-900 text-white fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-4 z-30",
+        div { class: "bg-gray-900 text-white fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-4 z-30 standalone:pb-8",
             div { class: "flex lg:justify-center lg:gap-4 justify-around",
-                NavButton {
-                    onclick: move |_| set_view(View::Posts),
-                    icon: Icons::House,
-                    text: "Home"
-                }
+                NavButton { onclick: move |_| set_view(View::Posts), icon: Icons::House, text: "Home" }
                 NavButton {
                     onclick: move |_| set_view(View::Search),
                     icon: Icons::Search,
@@ -818,7 +960,7 @@ fn Nav(cx: Scope) -> Element {
                     onclick: move |_| {
                         match logged_in {
                             true => set_modal_view(Some(View::Add)),
-                            false => set_modal_view(Some(View::Signup))
+                            false => set_modal_view(Some(View::Signup)),
                         }
                     },
                     icon: Icons::PlusSquare,
@@ -828,17 +970,17 @@ fn Nav(cx: Scope) -> Element {
                     onclick: move |_| {
                         match logged_in {
                             true => set_view(View::Messages),
-                            false => set_modal_view(Some(View::Signup))
+                            false => set_modal_view(Some(View::Signup)),
                         }
                     },
-                    icon: Icons::ChatLeftDots,
+                    icon: Icons::ChatsCircle,
                     text: "DM"
                 }
                 NavButton {
-                    onclick: move |_| { 
-                        match logged_in { 
-                            true => set_view(View::ShowAccount), 
-                            false => set_modal_view(Some(View::Signup))
+                    onclick: move |_| {
+                        match logged_in {
+                            true => set_view(View::ShowAccount),
+                            false => set_modal_view(Some(View::Signup)),
                         }
                     },
                     icon: Icons::PersonCircle,
@@ -863,8 +1005,9 @@ fn initial_props() -> Option<ServerProps> {
     {
         let initial_props_string = web_sys::window()?
             .document()?
-            .get_element_by_id("props")?
-            .get_attribute("value")?;
+            .query_selector(r#"meta[name="props"]"#)
+            .ok()??
+            .get_attribute("content")?;
         return serde_json::from_str(&initial_props_string).ok();
     }
 
@@ -878,7 +1021,9 @@ static READY: Atom<bool> = |_| false;
 static ACCOUNT: Atom<Option<Account>> = |_| None;
 static VIEW: Atom<View> = |_| Default::default();
 static MODAL_VIEW: Atom<Option<View>> = |_| None;
+static DRAWER_VIEW: Atom<Option<View>> = |_| None;
 static POSTS: Atom<Vec<Post>> = |_| Default::default();
+static COMMENTS: Atom<Vec<Comment>> = |_| Default::default();
 
 fn Router(cx: Scope<ServerProps>) -> Element {
     use_init_atom_root(cx);
@@ -931,7 +1076,8 @@ fn ComponentFromView(cx: Scope, view: View) -> Element {
             View::Search => rsx! { SearchComponent {} },
             View::Messages => rsx! { MessagesComponent {} },
             View::Add => rsx! { NewPost {} },
-            View::Profile(account) => rsx! { Profile { account: account } }
+            View::Profile(account) => rsx! { Profile { account: account } },
+            View::Comments(post) => rsx! { Comments { post: post } }
         }
     })
 }
@@ -939,46 +1085,48 @@ fn ComponentFromView(cx: Scope, view: View) -> Element {
 fn Root(cx: Scope) -> Element {
     let view = use_app_state(cx, VIEW);
     let modal_view = use_read(cx, MODAL_VIEW);
-    let modal_component =  match &modal_view {
+    let modal_component = match &modal_view {
         Some(view) => {
-            rsx! { Modal { ComponentFromView { view: view.clone() } } }
-        },
-        None => rsx! { () }
+            rsx! {
+                Modal { ComponentFromView { view: view.clone() } }
+            }
+        }
+        None => rsx! {()},
+    };
+    let drawer_view = use_read(cx, DRAWER_VIEW);
+    let drawer_component = match drawer_view {
+        Some(view) => {
+            rsx! {
+                Drawer { ComponentFromView { view: view.clone() } }
+            }
+        }
+        None => rsx! {()},
     };
     let scroll_class = match modal_view {
         Some(_) => "overflow-hidden",
-        None => ""
+        None => "",
     };
     cx.render(rsx! {
-        div { 
-            class: "dark:bg-gray-950 dark:text-white text-gray-950 h-[100dvh] {scroll_class}",
+        div { class: "dark:bg-gray-950 dark:text-white text-gray-950 h-[100dvh] {scroll_class}",
             Nav {}
             ComponentFromView { view: view }
-            modal_component
+            modal_component,
+            drawer_component
         }
     })
 }
 
 fn SearchComponent(cx: Scope) -> Element {
-    cx.render(rsx! {
-        div { "Search time" }
-    })
+    cx.render(rsx! { div { "Search time" } })
 }
 
 fn MessagesComponent(cx: Scope) -> Element {
-    cx.render(rsx! {
-        div { "Your DMs" }
-    })
+    cx.render(rsx! { div { "Your DMs" } })
 }
 
 #[inline_props]
 fn Profile<'a>(cx: Scope, account: &'a Account) -> Element {
-    cx.render(rsx! {
-        h1 {
-            class: "text-2xl text-center p-4 pt-16",
-            "{account.name}" 
-        }
-    })
+    cx.render(rsx! { h1 { class: "text-2xl text-center p-4 pt-16", "{account.name}" } })
 }
 
 fn Posts(cx: Scope) -> Element {
@@ -989,8 +1137,7 @@ fn Posts(cx: Scope) -> Element {
         rsx! { PostComponent { key: "{p.id}", post: p, logged_in: logged_in } }
     });
     cx.render(rsx! {
-        div {
-            class: "snap-mandatory snap-y overflow-y-auto max-w-md mx-auto h-[calc(100dvh-56px)] md:h-[100dvh]",
+        div { class: "snap-mandatory snap-y overflow-y-auto max-w-md mx-auto h-[calc(100dvh-56px)] md:h-[100dvh]",
             posts
         }
     })
@@ -999,74 +1146,211 @@ fn Posts(cx: Scope) -> Element {
 #[inline_props]
 fn PostComponent(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
     let set_modal_view = use_set(cx, MODAL_VIEW);
+    let set_drawer_view = use_set(cx, DRAWER_VIEW);
     let set_view = use_set(cx, VIEW);
-    let initial = post.account_initial();
     let posts = use_atom_state(cx, POSTS);
-    let on_like = move |post_id: i64| {
-        let sc = cx.sc();
-        to_owned![posts];
-        cx.spawn(async move {
-            if let Ok(Some(like)) = like_post(sc, post_id).await {
-                posts.with_mut(|posts| {
-                    for post in posts {
-                        if post.id == like.post_id {
-                            post.liked_by_current_account = Some(like.id);
-                            post.like_count = Some(post.like_count.unwrap_or(0) + 1);
-                        }
-                    }
-                })
-            }
-        })
-    };
+    let account = use_read(cx, ACCOUNT);
     let liked_class = match post.liked_by_current_account {
         Some(_) => "text-red-500",
-        None => ""
+        None => "",
+    };
+    let liked_icon = match post.liked_by_current_account {
+        Some(_) => &Icons::HeartFill,
+        None => &Icons::Heart,
     };
     let like_count = post.like_count.unwrap_or(0);
-    cx.render(rsx! {
-        div {
-            class: "snap-center flex items-center justify-center flex-col relative h-full",
-            div { 
-                class: "text-center text-2xl", "{post.body}"
+    let on_comment = move || {
+        set_drawer_view(Some(View::Comments(post.clone())));
+    };
+    let on_like = move || {
+        to_owned![posts, account];
+        let sc = cx.sc();
+        let post_id = post.id;
+        let account_id = account.unwrap().id;
+        let liked = post.liked_by_current_account.is_some();
+        let old_posts = posts.get().clone();
+        posts.with_mut(|posts| {
+            let Some(post) = posts.into_iter().find(|p| p.id == post_id) else { return };
+            if liked {
+                post.liked_by_current_account = None;
+                post.like_count = Some(post.like_count.unwrap_or(0) - 1);
+            } else {
+                post.liked_by_current_account = Some(account_id);
+                post.like_count = Some(post.like_count.unwrap_or(0) + 1);
             }
-            div { class: "flex flex-col gap-6 items-center absolute bottom-4 right-4 z-20",
+        });
+        cx.spawn(async move {
+            if liked {
+                if let Ok(false) | Err(_) = dislike_post(sc, post_id).await {
+                    // something has gone wrong, revert to old state
+                    posts.set(old_posts);
+                }
+            } else {
+                if let Ok(None) | Err(_) = like_post(sc, post_id).await {
+                    // something has gone wrong, revert to old state
+                    posts.set(old_posts);
+                }
+            }
+        });
+    };
+    let comment_count = post.comment_count;
+    cx.render(rsx! {
+        div { class: "snap-center flex items-center justify-center flex-col relative h-full",
+            div { class: "text-center text-2xl", "{post.body}" }
+            div { class: "flex flex-col gap-6 items-center absolute bottom-4 right-4 z-20 bg-gray-950/70",
                 button { class: "opacity-80", onclick: move |_| {} }
                 button {
                     class: "opacity-80 flex flex-col items-center",
                     onclick: move |_| {
                         match logged_in {
-                            true => on_like(post.id),
-                            false => set_modal_view(Some(View::Signup))
+                            true => on_like(),
+                            false => set_modal_view(Some(View::Signup)),
                         }
                     },
-                    div {
-                        class: "{liked_class}",
-                        Icon { size: 32, icon: &Icons::HeartFill }
-                    }
+                    div { class: "{liked_class}", Icon { size: 32, icon: &liked_icon } }
                     div { "{like_count}" }
                 }
-                button { 
+                button {
                     class: "opacity-80",
                     onclick: move |_| {
                         match logged_in {
-                            true => {},
-                            false => set_modal_view(Some(View::Signup))
+                            true => on_comment(),
+                            false => set_modal_view(Some(View::Signup)),
                         }
                     },
-                    Icon { size: 32, icon: &Icons::ChatFill }
+                    Icon { size: 32, icon: &Icons::ChatCircle }
+                    div { "{comment_count}" }
                 }
                 button {
                     class: "opacity-80",
                     onclick: move |_| {
                         to_owned![post];
-                        let account = Account { name: post.account_name, id: post.account_id, ..Default::default() };
+                        let account = Account {
+                            name: post.account_name,
+                            id: post.account_id,
+                            ..Default::default()
+                        };
                         set_view(View::Profile(account))
                     },
-                    div {
-                        class: "uppercase w-10 h-10 flex justify-center items-center text-center rounded-full dark:border-white border-gray-950 border-solid border-2",
-                        "{initial}"
-                    }
+                    ProfilePhoto { account: post.account() }
                 }
+            }
+        }
+    })
+}
+
+#[inline_props]
+fn ProfilePhoto(cx: Scope, account: Account) -> Element {
+    let initial = account.initial();
+    cx.render(rsx! {
+        div {
+            class: "uppercase w-8 h-8 flex justify-center items-center text-center rounded-full dark:border-white border-gray-950 border-solid border-2",
+            "{initial}"
+        }
+    })
+}
+
+#[inline_props]
+fn Comments<'a>(cx: Scope, post: &'a Post) -> Element {
+    let comments_state = use_atom_state(cx, COMMENTS);
+    let sc = cx.sc();
+    let post_id = post.id;
+    let future = use_future(cx, &post_id, |_| {
+        to_owned![comments_state];
+        async move {
+            match comments_by_post_id(sc, post_id).await {
+                Ok(c) => {
+                    comments_state.set(c.clone());
+                    c
+                }
+                Err(_) => vec![],
+            }
+        }
+    });
+    let comments = match future.value() {
+        Some(_) => rsx! {
+            comments_state.iter().map(|c| rsx! { CommentComponent { key: "{c.id}", comment: c }})
+        },
+        None => rsx! {
+            div {
+                class: "grid place-content-center",
+                Icon { icon: &Icons::CircleNotch, spin: true }
+            }
+        },
+    };
+    cx.render(rsx! {
+        div {
+            class: "p-4 flex flex-col gap-4 h-full",
+            h1 {
+                class: "text-xl text-center",
+                "Comments"
+            }
+            div {
+                class: "overflow-y-auto flex flex-col gap-8 h-[calc(100%-200px)]",
+                comments
+            }
+            // TODO: make this fixed to the bottom of the container
+            div {
+                class: "absolute left-4 right-4 bottom-4",
+                NewComment {
+                    post: post
+                }
+            }
+        }
+    })
+}
+
+#[inline_props]
+fn CommentComponent<'a>(cx: Scope, comment: &'a Comment) -> Element {
+    let account = comment.account();
+    cx.render(rsx! {
+        div {
+            class: "grid grid-cols-6",
+            div {
+                class: "col-span-1",
+                ProfilePhoto { account: account }
+            }
+            div {
+                class: "flex flex-col gap-2 col-span-5",
+                div {
+                    class: "flex gap-2",
+                    div { "{comment.account_name}" }
+                    div { "-" }
+                    div { "{comment.created_at}" }
+                }
+                div { "{comment.body}" }
+            }
+        }
+    })
+}
+
+#[inline_props]
+fn NewComment<'a>(cx: Scope, post: &'a Post) -> Element {
+    let comments = use_atom_state(cx, COMMENTS);
+    let posts = use_atom_state(cx, POSTS);
+    let body = use_state(cx, || "".to_string());
+    let onadd = move |_| {
+        to_owned![comments, posts];
+        let sc = cx.sc();
+        let body = body.get().clone();
+        let post_id = post.id;
+        cx.spawn(async move {
+            if let Ok(Some(comment)) = leave_comment(sc, post_id, body).await {
+                comments.with_mut(|comments| comments.push(comment));
+                posts.with_mut(|posts| {
+                    let Some(post) = posts.into_iter().find(|p| p.id == post_id) else { return };
+                    post.comment_count = post.comment_count + 1;
+                });
+            }
+        })
+    };
+    cx.render(rsx! {
+        div {
+            class: "flex flex-col gap-8",
+            div {
+                class: "flex flex-col gap-4",
+                TextArea { name: "body", oninput: move |e: FormEvent| body.set(e.value.clone()) }
+                Button { onclick: onadd, "Leave comment" }
             }
         }
     })
@@ -1110,7 +1394,7 @@ struct SignupState {
 
 fn Signup(cx: Scope) -> Element {
     let view_state = use_atom_state(cx, VIEW);
-    let modal_view_state= use_atom_state(cx, MODAL_VIEW);
+    let modal_view_state = use_atom_state(cx, MODAL_VIEW);
     let account_state = use_atom_state(cx, ACCOUNT);
     let signup_state = use_state(cx, || SignupState::default());
     let oninput = move |e: FormEvent| {
@@ -1218,20 +1502,28 @@ fn Login(cx: Scope) -> Element {
     let login_code = use_state(cx, || String::default());
     let error_state = use_state(cx, || "");
     let view_state = use_atom_state(cx, VIEW);
-    let modal_view_state= use_atom_state(cx, MODAL_VIEW);
+    let modal_view_state = use_atom_state(cx, MODAL_VIEW);
     let account_state = use_atom_state(cx, ACCOUNT);
+    let posts_state = use_atom_state(cx, POSTS);
     let onclick = move |_| {
         let login_code = login_code.get().clone();
         let sx = cx.sc();
-        to_owned![view_state, account_state, error_state, modal_view_state];
+        to_owned![
+            view_state,
+            account_state,
+            error_state,
+            modal_view_state,
+            posts_state
+        ];
         cx.spawn({
             async move {
                 if let Ok(account) = login(sx, login_code).await {
                     match account {
-                        Some(a) => {
-                            account_state.set(Some(a));
+                        Some((account, posts)) => {
+                            account_state.set(Some(account));
                             view_state.set(View::ShowAccount);
                             modal_view_state.set(None);
+                            posts_state.set(posts);
                         }
                         None => error_state.set("No username found. Wanna take it?"),
                     }
@@ -1403,7 +1695,7 @@ fn TextArea<'a>(cx: Scope<'a, InputProps<'a>>) -> Element {
     } = cx.props;
     cx.render(rsx! {
         textarea {
-            rows: 5,
+            rows: 2,
             class: "p-3 rounded-md bg-white outline-none border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white text-gray-950",
             oninput: move |e| fwd_handler(oninput, e),
             name: "{name}",
@@ -1432,16 +1724,75 @@ fn PasswordInput<'a>(cx: Scope<'a, InputProps<'a>>) -> Element {
 #[inline_props]
 fn Modal<'a>(cx: Scope, children: Element<'a>) -> Element {
     let modal_view = use_atom_state(cx, MODAL_VIEW);
-    let open_class= match modal_view.get() {
+    let open_class = match modal_view.get() {
         Some(_) => "",
-        None => "hidden"
+        None => "hidden",
     };
     return cx.render(
         rsx! {
-            div { class: "fixed inset-0 bg-white dark:bg-black transition-opacity opacity-80 z-30", onclick: move |_| modal_view.set(None) }
+            div {
+                class: "fixed inset-0 bg-white dark:bg-black transition-opacity opacity-80 z-30",
+                onclick: move |_| modal_view.set(None)
+            }
             div { class: "overflow-y-auto max-w-xl {open_class} mx-auto md:top-24 top-4 absolute left-4 right-4 rounded-md bg-gray-50 dark:bg-gray-900 z-40",
                 div { class: "absolute right-4 top-4",
-                    CircleButton { onclick: move |_| modal_view.set(None), div { class: "text-lg mb-1", "x" } }
+                    CircleButton { onclick: move |_| modal_view.set(None), Icon { icon: &Icons::XCircle } }
+                }
+                children
+            }
+        }
+    );
+}
+
+#[derive(Clone, PartialEq)]
+enum DrawerState {
+    Open,
+    Opening,
+    Closing,
+    Closed,
+}
+
+use gloo_timers::future::TimeoutFuture;
+
+#[inline_props]
+fn Drawer<'a>(cx: Scope, children: Element<'a>) -> Element {
+    let drawer_state = use_state(cx, || DrawerState::Opening);
+    let set_drawer_view = use_set(cx, DRAWER_VIEW);
+    let class = match drawer_state.get() {
+        DrawerState::Opening => "top-[100%]",
+        DrawerState::Open => "top-1/4",
+        DrawerState::Closing => "top-[100%]",
+        DrawerState::Closed => "",
+    };
+    let onclose = move |_| {
+        drawer_state.set(DrawerState::Closing);
+    };
+    let ontransitionend = move |_| {
+        if *drawer_state.get() == DrawerState::Closing {
+            drawer_state.set(DrawerState::Closed);
+            set_drawer_view(None);
+        }
+    };
+    cx.spawn({
+        to_owned![drawer_state];
+        async move {
+            if *drawer_state.get() == DrawerState::Opening {
+                TimeoutFuture::new(10).await;
+                drawer_state.set(DrawerState::Open);
+            }
+        }
+    });
+    return cx.render(
+        rsx! {
+            div {
+                class: "fixed inset-0 bg-white dark:bg-black transition-opacity opacity-80 z-30",
+                onclick: move |_| onclose(())
+            }
+            div {
+                class: "absolute w-full overflow-hidden h-3/4 bg-gray-200 dark:bg-gray-800 transition-all z-40 {class}",
+                ontransitionend: ontransitionend,
+                div { class: "absolute right-4 top-4",
+                    CircleButton { onclick: onclose, Icon { icon: &Icons::XCircle } }
                 }
                 children
             }
@@ -1469,80 +1820,82 @@ struct ButtonProps<'a> {
 
 #[derive(PartialEq)]
 enum Icons {
+    Heart,
     HeartFill,
-    ChatFill,
+    ChatCircle,
     House,
     Search,
     PlusSquare,
-    ChatLeftDots,
-    ChatLeftDotsFill,
-    PersonCircle
+    ChatsCircle,
+    PersonCircle,
+    XCircle,
+    CircleNotch,
 }
 
 #[inline_props]
-fn Icon<'a>(cx: Scope, icon: &'a Icons, size: Option<usize>) -> Element {
+fn Icon<'a>(cx: Scope, icon: &'a Icons, size: Option<usize>, spin: Option<bool>) -> Element {
     let size = size.unwrap_or(24);
     let width = size;
     let height = size;
+    let animate_spin = if let Some(true) = spin {
+        "animate-spin"
+    } else {
+        ""
+    };
     cx.render(rsx! {
         match icon {
-            Icons::HeartFill => rsx! {
+            Icons::Heart => rsx! {
                     span {
-                        dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" class="bi bi-heart-fill" viewBox="0 0 16 16">
-  <path fill-rule="evenodd" d="M8 1.314C12.438-3.248 23.534 4.735 8 15-7.534 4.736 3.562-3.248 8 1.314z"/>
-</svg>"#,
+                        dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" viewBox="0 0 256 256"><path d="M178 32c-20.65 0-38.73 8.88-50 23.89C116.73 40.88 98.65 32 78 32A62.07 62.07 0 0 0 16 94c0 70 103.79 126.66 108.21 129a8 8 0 0 0 7.58 0C136.21 220.66 240 164 240 94A62.07 62.07 0 0 0 178 32ZM128 206.8C109.74 196.16 32 147.69 32 94A46.06 46.06 0 0 1 78 48c19.45 0 35.78 10.36 42.6 27a8 8 0 0 0 14.8 0c6.82-16.67 23.15-27 42.6-27a46.06 46.06 0 0 1 46 46C224 147.61 146.24 196.15 128 206.8Z"></path></svg>"#,
+                    }
+            },
+            Icons::HeartFill => rsx! {
+                span {
+                    dangerous_inner_html: r#"
+                    <svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" viewBox="0 0 256 256"><path d="M232 94c0 66-104 122-104 122S24 160 24 94A54 54 0 0 1 78 40c22.59 0 41.94 12.31 50 32 8.06-19.69 27.41-32 50-32A54 54 0 0 1 232 94Z" opacity="0.2"></path><path d="M178 32c-20.65 0-38.73 8.88-50 23.89C116.73 40.88 98.65 32 78 32A62.07 62.07 0 0 0 16 94c0 70 103.79 126.66 108.21 129a8 8 0 0 0 7.58 0C136.21 220.66 240 164 240 94A62.07 62.07 0 0 0 178 32ZM128 206.8C109.74 196.16 32 147.69 32 94A46.06 46.06 0 0 1 78 48c19.45 0 35.78 10.36 42.6 27a8 8 0 0 0 14.8 0c6.82-16.67 23.15-27 42.6-27a46.06 46.06 0 0 1 46 46C224 147.61 146.24 196.15 128 206.8Z"></path></svg>
+                    "#
                 }
             },
-            Icons::ChatFill => rsx! {
+            Icons::ChatCircle => rsx! {
                 span {
-                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" class="bi bi-chat-fill" viewBox="0 0 16 16">
-  <path d="M8 15c4.418 0 8-3.134 8-7s-3.582-7-8-7-8 3.134-8 7c0 1.76.743 3.37 1.97 4.6-.097 1.016-.417 2.13-.771 2.966-.079.186.074.394.273.362 2.256-.37 3.597-.938 4.18-1.234A9.06 9.06 0 0 0 8 15z"/>
-</svg>"#        
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" viewBox="0 0 256 256"><path d="M128 24A104 104 0 0 0 36.18 176.88L24.83 210.93a16 16 0 0 0 20.24 20.24l34.05-11.35A104 104 0 1 0 128 24Zm0 192a87.87 87.87 0 0 1-44.06-11.81 8 8 0 0 0-6.54-.67L40 216 52.47 178.6a8 8 0 0 0-.66-6.54A88 88 0 1 1 128 216Z"></path></svg>"#       
                 }
             },
             Icons::House => rsx! {
                 span {
-                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" class="bi bi-house" viewBox="0 0 16 16">
-  <path d="M8.707 1.5a1 1 0 0 0-1.414 0L.646 8.146a.5.5 0 0 0 .708.708L2 8.207V13.5A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V8.207l.646.647a.5.5 0 0 0 .708-.708L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293L8.707 1.5ZM13 7.207V13.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5V7.207l5-5 5 5Z"/>
-</svg>"#
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" viewBox="0 0 256 256"><path d="M218.83 103.77l-80-75.48a1.14 1.14 0 0 1-.11-.11 16 16 0 0 0-21.53 0l-.11.11L37.17 103.77A16 16 0 0 0 32 115.55V208a16 16 0 0 0 16 16H96a16 16 0 0 0 16-16V160h32v48a16 16 0 0 0 16 16h48a16 16 0 0 0 16-16V115.55A16 16 0 0 0 218.83 103.77ZM208 208H160V160a16 16 0 0 0-16-16H112a16 16 0 0 0-16 16v48H48V115.55l.11-.1L128 40l79.9 75.43.11.1Z"></path></svg>"#
                 }
             },
             Icons::Search => rsx! {
                 span {
-                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" class="bi bi-search" viewBox="0 0 16 16">
-  <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
-</svg>"#
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" viewBox="0 0 256 256"><path d="M229.66 218.34l-50.07-50.06a88.11 88.11 0 1 0-11.31 11.31l50.06 50.07a8 8 0 0 0 11.32-11.32ZM40 112a72 72 0 1 1 72 72A72.08 72.08 0 0 1 40 112Z"></path></svg>"#
                 }
             },
             Icons::PlusSquare => rsx! {
                 span {
-                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" class="bi bi-plus-square" viewBox="0 0 16 16">
-  <path d="M14 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h12zM2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2z"/>
-  <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
-</svg>"#
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" viewBox="0 0 256 256">
+                    <path d="M208 32H48A16 16 0 0 0 32 48V208a16 16 0 0 0 16 16H208a16 16 0 0 0 16-16V48A16 16 0 0 0 208 32Zm0 176H48V48H208V208Zm-32-80a8 8 0 0 1-8 8H136v32a8 8 0 0 1-16 0V136H88a8 8 0 0 1 0-16h32V88a8 8 0 0 1 16 0v32h32A8 8 0 0 1 176 128Z"></path></svg>"#
                 }
             },
-            Icons::ChatLeftDotsFill => rsx! {
+            Icons::ChatsCircle => rsx! {
                 span {
-                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" class="bi bi-chat-left-dots-fill" viewBox="0 0 16 16">
-  <path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4.414a1 1 0 0 0-.707.293L.854 15.146A.5.5 0 0 1 0 14.793V2zm5 4a1 1 0 1 0-2 0 1 1 0 0 0 2 0zm4 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0zm3 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"/>
-</svg>"#
-                }
-            },
-            Icons::ChatLeftDots => rsx! {
-                span {
-                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" class="bi bi-chat-left-dots" viewBox="0 0 16 16">
-  <path d="M14 1a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4.414A2 2 0 0 0 3 11.586l-2 2V2a1 1 0 0 1 1-1h12zM2 0a2 2 0 0 0-2 2v12.793a.5.5 0 0 0 .854.353l2.853-2.853A1 1 0 0 1 4.414 12H14a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2z"/>
-  <path d="M5 6a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm4 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm4 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
-</svg>"#
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" viewBox="0 0 256 256"><path d="M231.79 187.33A80 80 0 0 0 169.57 72.59 80 80 0 1 0 24.21 139.33l-7.66 26.82a14 14 0 0 0 17.3 17.3l26.82-7.66a80.15 80.15 0 0 0 25.75 7.63 80 80 0 0 0 108.91 40.37l26.82 7.66a14 14 0 0 0 17.3-17.3ZM61.53 159.23a8.22 8.22 0 0 0-2.2.3l-26.41 7.55 7.55-26.41a8 8 0 0 0-.68-6 63.95 63.95 0 1 1 25.57 25.57A7.94 7.94 0 0 0 61.53 159.23Zm154 29.44 7.55 26.41-26.41-7.55a8 8 0 0 0-6 .68 64.06 64.06 0 0 1-86.32-24.64A79.93 79.93 0 0 0 174.7 89.71a64 64 0 0 1 41.51 92.93A8 8 0 0 0 215.53 188.67Z"></path></svg>"#
                 }
             },
             Icons::PersonCircle => rsx! {
                 span {
-                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" class="bi bi-person-circle" viewBox="0 0 16 16">
-  <path d="M11 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/>
-  <path fill-rule="evenodd" d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8zm8-7a7 7 0 0 0-5.468 11.37C3.242 11.226 4.805 10 8 10s4.757 1.225 5.468 2.37A7 7 0 0 0 8 1z"/>
-</svg>"#
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width={width} height="{height}" fill="currentColor" viewBox="0 0 256 256">
+                    <path d="M128 24A104 104 0 1 0 232 128 104.11 104.11 0 0 0 128 24ZM74.08 197.5a64 64 0 0 1 107.84 0 87.83 87.83 0 0 1-107.84 0ZM96 120a32 32 0 1 1 32 32A32 32 0 0 1 96 120Zm97.76 66.41a79.66 79.66 0 0 0-36.06-28.75 48 48 0 1 0-59.4 0 79.66 79.66 0 0 0-36.06 28.75 88 88 0 1 1 131.52 0Z"></path></svg>"#
+                }
+            },
+            Icons::XCircle => rsx! {
+                span {
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" viewBox="0 0 256 256"><path d="M165.66 101.66 139.31 128l26.35 26.34a8 8 0 0 1-11.32 11.32L128 139.31l-26.34 26.35a8 8 0 0 1-11.32-11.32L116.69 128 90.34 101.66a8 8 0 0 1 11.32-11.32L128 116.69l26.34-26.35a8 8 0 0 1 11.32 11.32ZM232 128A104 104 0 1 1 128 24 104.11 104.11 0 0 1 232 128Zm-16 0a88 88 0 1 0-88 88A88.1 88.1 0 0 0 216 128Z"></path></svg>"#
+                }
+            },
+            Icons::CircleNotch => rsx! {
+                span {
+                    dangerous_inner_html: r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" fill="currentColor" viewBox="0 0 256 256" class="{animate_spin}"><path d="M224,128a96,96,0,1,1-96-96A96,96,0,0,1,224,128Z" opacity="0.2"></path><path d="M232 128a104 104 0 0 1-208 0c0-41 23.81-78.36 60.66-95.27a8 8 0 0 1 6.68 14.54C60.15 61.59 40 93.27 40 128a88 88 0 0 0 176 0c0-34.73-20.15-66.41-51.34-80.73a8 8 0 0 1 6.68-14.54C208.19 49.64 232 87 232 128Z"></path></svg>"#
                 }
             }
         }

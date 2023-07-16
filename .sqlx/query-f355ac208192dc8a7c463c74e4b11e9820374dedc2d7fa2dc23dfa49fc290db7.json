@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "insert into likes (account_id, post_id, created_at, updated_at) values (?, ?, ?, ?) returning *",
+  "query": "insert into comments (account_id, post_id, body, created_at, updated_at) values (?, ?, ?, ?, ?) returning *, '' as account_name",
   "describe": {
     "columns": [
       {
@@ -19,20 +19,32 @@
         "type_info": "Int64"
       },
       {
-        "name": "updated_at",
+        "name": "body",
         "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 4,
         "type_info": "Int64"
       },
       {
         "name": "created_at",
-        "ordinal": 4,
+        "ordinal": 5,
         "type_info": "Int64"
+      },
+      {
+        "name": "account_name",
+        "ordinal": 6,
+        "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 4
+      "Right": 5
     },
     "nullable": [
+      false,
+      false,
       false,
       false,
       false,
@@ -40,5 +52,5 @@
       false
     ]
   },
-  "hash": "0016fe0715253aefd9019a9bb626ac9ec36452e4056d3823db7362ea84b4f432"
+  "hash": "f355ac208192dc8a7c463c74e4b11e9820374dedc2d7fa2dc23dfa49fc290db7"
 }
