@@ -1160,6 +1160,7 @@ fn PostComponent(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
     };
     let like_count = post.like_count.unwrap_or(0);
     let on_comment = move || {
+        set_modal_view(None);
         set_drawer_view(Some(View::Comments(post.clone())));
     };
     let on_like = move || {
@@ -1213,10 +1214,7 @@ fn PostComponent(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
                 button {
                     class: "opacity-80",
                     onclick: move |_| {
-                        match logged_in {
-                            true => on_comment(),
-                            false => set_modal_view(Some(View::Signup)),
-                        }
+                        on_comment()
                     },
                     Icon { size: 32, icon: &Icons::ChatCircle }
                     div { "{comment_count}" }
@@ -1782,22 +1780,20 @@ fn Drawer<'a>(cx: Scope, children: Element<'a>) -> Element {
             }
         }
     });
-    return cx.render(
-        rsx! {
-            div {
-                class: "fixed inset-0 bg-white dark:bg-black transition-opacity opacity-80 z-30",
-                onclick: move |_| onclose(())
-            }
-            div {
-                class: "absolute w-full overflow-hidden h-3/4 bg-gray-200 dark:bg-gray-800 transition-all z-40 {class}",
-                ontransitionend: ontransitionend,
-                div { class: "absolute right-4 top-4",
-                    CircleButton { onclick: onclose, Icon { icon: &Icons::XCircle } }
-                }
-                children
-            }
+    cx.render(rsx! {
+        div {
+            class: "fixed inset-0 bg-white dark:bg-black transition-opacity opacity-80 z-30",
+            onclick: move |_| onclose(())
         }
-    );
+        div {
+            class: "absolute w-full overflow-hidden h-3/4 bg-gray-200 dark:bg-gray-800 transition-all z-40 {class}",
+            ontransitionend: ontransitionend,
+            div { class: "absolute right-4 top-4",
+                CircleButton { onclick: onclose, Icon { icon: &Icons::XCircle } }
+            }
+            children
+        }
+    })
 }
 
 #[inline_props]
