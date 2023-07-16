@@ -1197,7 +1197,7 @@ fn PostComponent(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
     cx.render(rsx! {
         div { class: "snap-center flex items-center justify-center flex-col relative h-full",
             div { class: "text-center text-2xl", "{post.body}" }
-            div { class: "flex flex-col gap-6 items-center absolute bottom-4 right-4 z-20 bg-gray-950/70",
+            div { class: "flex flex-col gap-6 items-center absolute bottom-4 right-4 z-20 dark:bg-gray-950/70",
                 button { class: "opacity-80", onclick: move |_| {} }
                 button {
                     class: "opacity-80 flex flex-col items-center",
