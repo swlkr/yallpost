@@ -945,7 +945,7 @@ fn NavButton<'a>(
 fn Nav(cx: Scope) -> Element {
     let account = use_app_state(cx, ACCOUNT);
     let set_view = use_set(cx, VIEW);
-    let set_modal_view = use_set(cx, MODAL_VIEW);
+    let set_frame_view = use_set(cx, FRAME_VIEW);
     let logged_in = account.is_some();
     cx.render(rsx! {
         div { class: "bg-gray-900 text-white fixed lg:top-0 lg:bottom-auto bottom-0 w-full py-4 z-30 standalone:pb-8",
@@ -959,8 +959,8 @@ fn Nav(cx: Scope) -> Element {
                 NavButton {
                     onclick: move |_| {
                         match logged_in {
-                            true => set_modal_view(Some(View::Add)),
-                            false => set_modal_view(Some(View::Signup)),
+                            true => set_frame_view(Frame::Modal(View::Add)),
+                            false => set_frame_view(Frame::Modal(View::Signup)),
                         }
                     },
                     icon: Icons::PlusSquare,
@@ -970,7 +970,7 @@ fn Nav(cx: Scope) -> Element {
                     onclick: move |_| {
                         match logged_in {
                             true => set_view(View::Messages),
-                            false => set_modal_view(Some(View::Signup)),
+                            false => set_frame_view(Frame::Modal(View::Signup)),
                         }
                     },
                     icon: Icons::ChatsCircle,
@@ -980,7 +980,7 @@ fn Nav(cx: Scope) -> Element {
                     onclick: move |_| {
                         match logged_in {
                             true => set_view(View::ShowAccount),
-                            false => set_modal_view(Some(View::Signup)),
+                            false => set_frame_view(Frame::Modal(View::Signup)),
                         }
                     },
                     icon: Icons::PersonCircle,
@@ -1017,11 +1017,16 @@ fn initial_props() -> Option<ServerProps> {
     }
 }
 
+enum Frame {
+    Drawer(View),
+    Modal(View),
+    Empty,
+}
+
 static READY: Atom<bool> = |_| false;
 static ACCOUNT: Atom<Option<Account>> = |_| None;
 static VIEW: Atom<View> = |_| Default::default();
-static MODAL_VIEW: Atom<Option<View>> = |_| None;
-static DRAWER_VIEW: Atom<Option<View>> = |_| None;
+static FRAME_VIEW: Atom<Frame> = |_| Frame::Empty;
 static POSTS: Atom<Vec<Post>> = |_| Default::default();
 static COMMENTS: Atom<Vec<Comment>> = |_| Default::default();
 
@@ -1084,34 +1089,25 @@ fn ComponentFromView(cx: Scope, view: View) -> Element {
 
 fn Root(cx: Scope) -> Element {
     let view = use_app_state(cx, VIEW);
-    let modal_view = use_read(cx, MODAL_VIEW);
-    let modal_component = match modal_view {
-        Some(view) => {
-            rsx! {
-                Modal { ComponentFromView { view: view.clone() } }
-            }
-        }
-        None => rsx! {()},
+    let frame_view = use_read(cx, FRAME_VIEW);
+    let frame = match frame_view {
+        Frame::Modal(view) => rsx! {
+            Modal { ComponentFromView { view: view.clone() } }
+        },
+        Frame::Drawer(view) => rsx! {
+            Drawer { ComponentFromView { view: view.clone() } }
+        },
+        Frame::Empty => rsx! { () },
     };
-    let drawer_view = use_read(cx, DRAWER_VIEW);
-    let drawer_component = match drawer_view {
-        Some(view) => {
-            rsx! {
-                Drawer { ComponentFromView { view: view.clone() } }
-            }
-        }
-        None => rsx! {()},
-    };
-    let scroll_class = match modal_view {
-        Some(_) => "overflow-hidden",
-        None => "",
+    let scroll_class = match frame_view {
+        Frame::Empty => "",
+        _ => "overflow-hidden",
     };
     cx.render(rsx! {
         div { class: "dark:bg-gray-950 dark:text-white text-gray-950 h-[100dvh] {scroll_class}",
             Nav {}
             ComponentFromView { view: view }
-            modal_component,
-            drawer_component
+            frame,
         }
     })
 }
@@ -1145,8 +1141,7 @@ fn Posts(cx: Scope) -> Element {
 
 #[inline_props]
 fn PostComponent(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
-    let set_modal_view = use_set(cx, MODAL_VIEW);
-    let set_drawer_view = use_set(cx, DRAWER_VIEW);
+    let set_frame_view = use_set(cx, FRAME_VIEW);
     let set_view = use_set(cx, VIEW);
     let posts = use_atom_state(cx, POSTS);
     let account = use_read(cx, ACCOUNT);
@@ -1160,8 +1155,7 @@ fn PostComponent(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
     };
     let like_count = post.like_count.unwrap_or(0);
     let on_comment = move || {
-        set_modal_view(None);
-        set_drawer_view(Some(View::Comments(post.clone())));
+        set_frame_view(Frame::Drawer(View::Comments(post.clone())));
     };
     let on_like = move || {
         to_owned![posts, account];
@@ -1205,7 +1199,7 @@ fn PostComponent(cx: Scope, post: Post, logged_in: bool) -> Element<'a> {
                     onclick: move |_| {
                         match logged_in {
                             true => on_like(),
-                            false => set_modal_view(Some(View::Signup)),
+                            false => set_frame_view(Frame::Modal(View::Signup)),
                         }
                     },
                     div { class: "{liked_class}", Icon { size: 32, icon: &liked_icon } }
@@ -1356,16 +1350,16 @@ fn NewComment<'a>(cx: Scope, post: &'a Post) -> Element {
 
 fn NewPost(cx: Scope) -> Element {
     let posts_state = use_atom_state(cx, POSTS);
-    let modal_view_state = use_atom_state(cx, MODAL_VIEW);
+    let frame_view = use_atom_state(cx, FRAME_VIEW);
     let body = use_state(cx, || "".to_string());
     let on_add = move |_| {
-        to_owned![body, posts_state, modal_view_state];
+        to_owned![body, posts_state, frame_view];
         let sc = cx.sc();
         cx.spawn(async move {
             match add_post(sc, body.get().clone()).await {
                 Ok(Some(new_post)) => {
                     posts_state.with_mut(|p| p.insert(0, new_post));
-                    modal_view_state.set(None);
+                    frame_view.set(Frame::Empty);
                 }
                 Ok(None) => todo!(),
                 Err(err) => log::info!("{}", err),
@@ -1392,7 +1386,7 @@ struct SignupState {
 
 fn Signup(cx: Scope) -> Element {
     let view_state = use_atom_state(cx, VIEW);
-    let modal_view_state = use_atom_state(cx, MODAL_VIEW);
+    let frame_view = use_atom_state(cx, FRAME_VIEW);
     let account_state = use_atom_state(cx, ACCOUNT);
     let signup_state = use_state(cx, || SignupState::default());
     let oninput = move |e: FormEvent| {
@@ -1404,7 +1398,7 @@ fn Signup(cx: Scope) -> Element {
     };
     let onclick = move |_| {
         let sc = cx.sc();
-        to_owned![signup_state, account_state, view_state, modal_view_state];
+        to_owned![signup_state, account_state, view_state, frame_view];
         cx.spawn({
             async move {
                 signup_state.with_mut(|state| state.loading = true);
@@ -1413,7 +1407,7 @@ fn Signup(cx: Scope) -> Element {
                     Ok(Ok(account)) => {
                         account_state.set(Some(account));
                         view_state.set(View::ShowAccount);
-                        modal_view_state.set(None);
+                        frame_view.set(Frame::Empty);
                     }
                     Ok(Err(sn)) => {
                         signup_state.with_mut(|st| {
@@ -1456,7 +1450,7 @@ fn Signup(cx: Scope) -> Element {
             }
             button {
                 class: "text-center text-indigo-500",
-                onclick: move |_| modal_view_state.set(Some(View::Login)),
+                onclick: move |_| frame_view.set(Frame::Modal(View::Login)),
                 "Click here to login"
             }
         }
@@ -1500,7 +1494,7 @@ fn Login(cx: Scope) -> Element {
     let login_code = use_state(cx, || String::default());
     let error_state = use_state(cx, || "");
     let view_state = use_atom_state(cx, VIEW);
-    let modal_view_state = use_atom_state(cx, MODAL_VIEW);
+    let frame_view = use_atom_state(cx, FRAME_VIEW);
     let account_state = use_atom_state(cx, ACCOUNT);
     let posts_state = use_atom_state(cx, POSTS);
     let onclick = move |_| {
@@ -1510,7 +1504,7 @@ fn Login(cx: Scope) -> Element {
             view_state,
             account_state,
             error_state,
-            modal_view_state,
+            frame_view,
             posts_state
         ];
         cx.spawn({
@@ -1520,7 +1514,7 @@ fn Login(cx: Scope) -> Element {
                         Some((account, posts)) => {
                             account_state.set(Some(account));
                             view_state.set(View::ShowAccount);
-                            modal_view_state.set(None);
+                            frame_view.set(Frame::Empty);
                             posts_state.set(posts);
                         }
                         None => error_state.set("No username found. Wanna take it?"),
@@ -1543,7 +1537,7 @@ fn Login(cx: Scope) -> Element {
             }
             button {
                 class: "text-center text-indigo-500",
-                onclick: move |_| modal_view_state.set(Some(View::Signup)),
+                onclick: move |_| frame_view.set(Frame::Modal(View::Signup)),
                 "Click here to sign up"
             }
         }
@@ -1721,20 +1715,20 @@ fn PasswordInput<'a>(cx: Scope<'a, InputProps<'a>>) -> Element {
 
 #[inline_props]
 fn Modal<'a>(cx: Scope, children: Element<'a>) -> Element {
-    let modal_view = use_atom_state(cx, MODAL_VIEW);
-    let open_class = match modal_view.get() {
-        Some(_) => "",
-        None => "hidden",
+    let frame_view = use_atom_state(cx, FRAME_VIEW);
+    let open_class = match frame_view.get() {
+        Frame::Modal(_) => "",
+        _ => "hidden",
     };
     return cx.render(
         rsx! {
             div {
                 class: "fixed inset-0 bg-white dark:bg-black transition-opacity opacity-80 z-30",
-                onclick: move |_| modal_view.set(None)
+                onclick: move |_| frame_view.set(Frame::Empty)
             }
             div { class: "overflow-y-auto max-w-xl {open_class} mx-auto md:top-24 top-4 absolute left-4 right-4 rounded-md bg-gray-50 dark:bg-gray-900 z-40",
                 div { class: "absolute right-4 top-4",
-                    CircleButton { onclick: move |_| modal_view.set(None), Icon { icon: &Icons::XCircle } }
+                    CircleButton { onclick: move |_| frame_view.set(Frame::Empty), Icon { icon: &Icons::XCircle } }
                 }
                 children
             }
@@ -1755,7 +1749,7 @@ use gloo_timers::future::TimeoutFuture;
 #[inline_props]
 fn Drawer<'a>(cx: Scope, children: Element<'a>) -> Element {
     let drawer_state = use_state(cx, || DrawerState::Opening);
-    let set_drawer_view = use_set(cx, DRAWER_VIEW);
+    let set_frame_view = use_set(cx, FRAME_VIEW);
     let class = match drawer_state.get() {
         DrawerState::Opening => "top-[100%]",
         DrawerState::Open => "top-1/4",
@@ -1768,7 +1762,7 @@ fn Drawer<'a>(cx: Scope, children: Element<'a>) -> Element {
     let ontransitionend = move |_| {
         if *drawer_state.get() == DrawerState::Closing {
             drawer_state.set(DrawerState::Closed);
-            set_drawer_view(None);
+            set_frame_view(Frame::Empty);
         }
     };
     cx.spawn({
