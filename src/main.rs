@@ -1085,7 +1085,7 @@ fn ComponentFromView(cx: Scope, view: View) -> Element {
 fn Root(cx: Scope) -> Element {
     let view = use_app_state(cx, VIEW);
     let modal_view = use_read(cx, MODAL_VIEW);
-    let modal_component = match &modal_view {
+    let modal_component = match modal_view {
         Some(view) => {
             rsx! {
                 Modal { ComponentFromView { view: view.clone() } }
