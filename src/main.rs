@@ -97,7 +97,6 @@ mod backend {
                     Ok(_) => {}
                     Err(err) => println!("{}", err),
                 }
-                // need to delete tailwind cdn
             }
             _ => {
                 let env = Env::new();
