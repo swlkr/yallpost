@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                    select accounts.name\n                    from accounts\n                    where accounts.name like ?\n                    order by accounts.name\n                    limit 30\n                ",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cc553ce6d7a85db065b694c211cc690f910335026ebf2b69af02becc093de33a"
+}

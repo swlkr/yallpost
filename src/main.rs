@@ -16,7 +16,7 @@ use dioxus::prelude::*;
 use dioxus_fullstack::prelude::*;
 use fermi::prelude::*;
 use justerror::Error;
-use models::{Account, Comment, HasAccount, Post, Session};
+use models::{Account, Comment, HasAccount, Post, SearchResult, Session};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -579,6 +579,24 @@ mod backend {
             .await?;
             Ok(comments)
         }
+
+        pub async fn search(&self, query: String) -> Result<Vec<SearchResult>> {
+            let query = format!("{}%", query);
+            let results = sqlx::query_as!(
+                SearchResult,
+                r#"
+                    select accounts.name
+                    from accounts
+                    where accounts.name like ?
+                    order by accounts.name
+                    limit 30
+                "#,
+                query
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            Ok(results)
+        }
     }
 
     #[derive(Debug, Default)]
@@ -701,6 +719,11 @@ pub mod models {
             }
         }
     }
+
+    #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug)]
+    pub struct SearchResult {
+        pub name: String,
+    }
 }
 
 #[Error]
@@ -816,6 +839,16 @@ async fn comments_by_post_id(
     let db = use_db(&sx);
     let comments = db.comments_by_post_id(post_id).await?;
     Ok(comments)
+}
+
+#[server(Search, "", "Cbor")]
+async fn search(
+    sx: DioxusServerContext,
+    query: String,
+) -> Result<Vec<SearchResult>, ServerFnError> {
+    let db = use_db(&sx);
+    let results = db.search(query).await?;
+    Ok(results)
 }
 
 impl From<AppError> for ServerFnError {
@@ -1102,17 +1135,51 @@ fn Root(cx: Scope) -> Element {
         Frame::Empty => "",
         _ => "overflow-hidden",
     };
-    cx.render(rsx! {
+    render!(
         div { class: "dark:bg-gray-950 dark:text-white text-gray-950 h-[100dvh] {scroll_class}",
             Nav {}
             ComponentFromView { view: view }
             frame,
         }
-    })
+    )
 }
 
 fn SearchComponent(cx: Scope) -> Element {
-    cx.render(rsx! { div { "Search time" } })
+    let set_view = use_set(cx, VIEW);
+    let query = use_state(cx, || String::default());
+    let results: &UseState<Vec<SearchResult>> = use_state(cx, || vec![]);
+    let oninput = move |e: FormEvent| {
+        if e.value.len() < 3 {
+            return results.set(vec![]);
+        }
+        let sc = cx.sc();
+        let prev = e.value.clone();
+        query.set(e.value.clone());
+        cx.spawn({
+            to_owned![query, results];
+            async move {
+                TimeoutFuture::new(300).await;
+                let current = query.current().to_string();
+                if prev == current {
+                    if let Ok(r) = search(sc, current).await {
+                        results.set(r);
+                    }
+                }
+            }
+        })
+    };
+    let search_results = results.iter().map(|sr| {
+        rsx! {
+            button { onclick: move |_| set_view(View::Profile(Account { name: sr.name.clone(), ..Default::default() })), "{sr.name}" }
+        }
+    });
+    render!(
+        div {
+            class: "flex flex-col gap-4 p-4",
+            TextInput { name: "search", oninput: oninput, placeholder: "Who out here?" }
+            search_results
+        }
+    )
 }
 
 fn MessagesComponent(cx: Scope) -> Element {
@@ -1317,10 +1384,15 @@ fn CommentComponent<'a>(cx: Scope, comment: &'a Comment) -> Element {
 
 #[inline_props]
 fn NewComment<'a>(cx: Scope, post: &'a Post) -> Element {
+    let account = use_read(cx, ACCOUNT);
+    let set_frame_view = use_set(cx, FRAME_VIEW);
     let comments = use_atom_state(cx, COMMENTS);
     let posts = use_atom_state(cx, POSTS);
     let body = use_state(cx, || "".to_string());
     let onadd = move |_| {
+        if account.is_none() {
+            return set_frame_view(Frame::Modal(View::Signup));
+        }
         to_owned![comments, posts];
         let sc = cx.sc();
         let body = body.get().clone();
@@ -1335,7 +1407,7 @@ fn NewComment<'a>(cx: Scope, post: &'a Post) -> Element {
             }
         })
     };
-    cx.render(rsx! {
+    render!(
         div {
             class: "flex flex-col gap-8",
             div {
@@ -1344,7 +1416,7 @@ fn NewComment<'a>(cx: Scope, post: &'a Post) -> Element {
                 Button { onclick: onadd, "Leave comment" }
             }
         }
-    })
+    )
 }
 
 fn NewPost(cx: Scope) -> Element {
@@ -1426,7 +1498,7 @@ fn Signup(cx: Scope) -> Element {
         is_available,
         ..
     } = signup_state.signup_name;
-    cx.render(rsx! {
+    render!(
         div { class: "max-w-md mx-auto flex flex-col gap-8 p-4",
             h1 { class: "text-2xl text-gray-950 dark:text-white", "Signup" }
             div { class: "flex flex-col gap-2",
@@ -1453,7 +1525,7 @@ fn Signup(cx: Scope) -> Element {
                 "Click here to login"
             }
         }
-    })
+    )
 }
 
 #[derive(Default, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
